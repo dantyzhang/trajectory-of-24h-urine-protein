@@ -1,0 +1,2363 @@
+---
+title: "24hUpro_LN_trajectory"
+author: "Danty_Zhang"
+date: "2021/3/15"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+---
+title: "LN_urine trajectory"
+author: "Danty_Zhang"
+date: "2021/3/1"
+output: html_document
+---
+
+```{r}
+rm(list = ls())
+library(sqldf)
+library(readxl)
+library(openxlsx)
+options(stringsAsFactors = F)
+options(scipen=200)
+options(digists=2)
+library(tidyr)
+library(stringr)
+library(lcmm)
+library(lattice)
+library(naniar)
+library(sqldf)
+# devtools::install_github('hlennon/LCTMtools')
+library(LCTMtools)
+library(ggplot2)
+```
+
+
+```{r input data}
+mydata<-read.table("2.mydata.TXT",header = TRUE,check.names = FALSE)
+names(mydata)<-c("ID","mon","Upro")
+str(mydata)
+basdata<-read_xls(path = "1.LN尿蛋白趋势基线_20210820.xls",sheet="ai更新后统计数据newonset") #baseline data
+addnew<-read.xlsx("lntragectoryR20210820_IS.xlsx")
+addnew<-addnew[,c(2,76,77,78,79,80)]
+names(addnew)
+basdata<-merge(basdata,addnew,by="ID",all.x = T)
+write.xlsx(basdata,file="1基线update211011.xlsx")
+basdata<-read.xlsx("1基线update211011_zdt.xlsx")
+ID_NOBIOPSY<-basdata[is.na(basdata$LNCLASS),]$ID  #ID without biopsy
+# nopreIS_currentIS RTX LEF FK506 AZA RTX+BLM
+# RTX ALD SRL LEF RTX+BLM
+
+IDneeded<-setdiff(mydata$ID,ID_NOBIOPSY)
+mydata<-mydata[mydata$ID %in% IDneeded,]
+mydata$mon<-round(mydata$mon,2)
+mydata$Upro<-round(mydata$Upro,2)
+mydata<-mydata[!mydata$mon>24,]  ##delete urine protein more than 24 months
+
+```
+
+```{r data_pre}
+count<-as.data.frame(table(mydata$ID)) #214 observations
+average_visit<-mean(count$Freq) #average_visit 7.6
+names(mydata)
+average_maxtime<-sqldf("SELECT ID,max(mon) FROM mydata GROUP BY ID") #follow-up time
+average_maxfollmean<-mean(average_maxtime$`max(mon)`) #16.55
+
+# follow-up time more than 6 months
+year_2p<-average_maxtime[average_maxtime$`max(mon)`>=6,] 
+year_2p<-year_2p$ID
+mydata<-mydata[mydata$ID %in% year_2p,] #1513
+
+# exclude those patients with less than 1 visit
+freq<-as.data.frame(table(mydata$ID)) # 
+no<-freq[freq$Freq==1,]
+no<-as.vector(no$Var1)
+mydata<-mydata[!mydata$ID %in% no,]  ##
+
+# description
+count<-as.data.frame(table(mydata$ID)) #197 observations ??
+average_visit<-mean(count$Freq) #average_visit 7.7
+summary(count$Freq)
+average_maxtime<-sqldf("SELECT ID,max(mon) FROM mydata GROUP BY ID") #follow-up time
+verage_maxfollmean<-mean(average_maxtime$`max(mon)`) # 16.6 mon
+basdatanew<-merge(average_maxtime,basdata,by="ID",all.x = T)  #194
+# a<-setdiff(c(1:288),basdatanew$ID)
+# write.xlsx(a,file = "flowchart.xlsx")
+
+# summary(average_maxtime)
+# table(data$response,data$relapse)
+```
+
+
+```{r trajectory all}
+summary(mydata)
+pdf(file ="./figures/fig1A_all_单线条.pdf",width = 10,height=7,title = "all")
+color <- mydata$ID
+xyplot(Upro ~ mon, mydata, groups = ID, col=color, lwd=2, type="l")
+dev.off()
+```
+
+```{r derivation mydata}
+mydata1<-mydata
+mydata1$IDmon<-paste(mydata1$ID,mydata1$mon,sep = "_")
+
+cr1<-read.xlsx("3.mydata20210802dt_sta.xlsX",sheet = 12) #baseline data
+cr2<-read.xlsx("3.mydata20210802dt_sta.xlsX",sheet = 13) #baseline data
+cr3<-read.xlsx("3.mydata20210802dt_sta.xlsX",sheet = 14) #baseline data
+names(cr1)<-c("ID","mon","upro24","Cr")
+names(cr2)<-c("ID","mon","upro24","Cr")
+names(cr3)<-c("ID","mon","upro24","Cr")
+CR<-rbind(cr1,cr2,cr3)
+CR$mon<-round(CR$mon,2)
+CR_no0<-CR[!CR$mon==0,]
+CR_0<-data.frame(ID=basdatanew$ID,mon="0",upro24=basdatanew$UP24H,Cr=basdatanew$CR)
+CR<-rbind(CR_0,CR_no0)
+CR$mon<-as.numeric(CR$mon)
+CR$IDmon<-paste(CR$ID,CR$mon,sep = "_")
+
+mydata1<-merge(mydata1,CR[,c("IDmon","Cr")],by="IDmon",all.x = T)[,-1]
+mydata1<-sqldf("SELECT * FROM mydata1 ORDER BY ID,mon ASC")
+write.xlsx(mydata1,"mydata_pro_cr.xlsx")
+mydata1<-read.xlsx("mydata_pro_cr_fill.xlsx") ##
+mydata1<-mydata1[,c("ID", "mon", "Cr","Upro")]###到这里
+# female
+agesex<-basdatanew[,c("ID","age","gender" )]
+mydata1<-merge(mydata1,agesex,by="ID",all.x = T)
+
+
+# # 142*min(standardized Scr/K, 1)^α *
+# # max(standardized Scr/K, 1)^-1.200 *
+# # 0.9938^Age *
+# # 1.012 [if female]
+#
+# # Scr 1mg/dL=88.4umol/L
+# # eGFR (estimated glomerular filtration rate) = mL/min/ 1.73 m2
+# # Scr (serum creatinine) = mg/dL
+# # K = 0.7 (females) or 0.9 (males)
+# # α = -0.241 (females) or -0.302 (males)
+# # min = indicates the minimum of Scr/K or 1
+# # max = indicates the maximum of Scr/K or 1
+
+##GFR
+
+GFR_female<-data.frame(ID=mydata1$ID,age=mydata1$age,gender=mydata1$gender,stad1=(mydata1$Cr/88.4)/0.7,Cr=mydata1$Cr,Upro=mydata1$Upro,mon=mydata1$mon)  #
+GFR_female$one<-1
+GFR_female$stad1min<-apply(GFR_female[,c("stad1","one")],1,min)
+GFR_female$stad1max<-apply(GFR_female[,c("stad1","one")],1,max)
+GFR_female$eGFR<-142*(GFR_female$stad1min)^-0.241*(GFR_female$stad1max)^-1.2*0.9938^(GFR_female$age)*1.012  #
+GFR_female<-GFR_female[GFR_female$gender==0,]
+# male
+GFR_male<-data.frame(ID=mydata1$ID,age=mydata1$age,gender=mydata1$gender,stad1=(mydata1$Cr/88.4)/0.9,Cr=mydata1$Cr,Upro=mydata1$Upro,mon=mydata1$mon)  #
+GFR_male$one<-1
+GFR_male$stad1min<-apply(GFR_male[,c("stad1","one")],1,min)
+GFR_male$stad1max<-apply(GFR_male[,c("stad1","one")],1,max)
+GFR_male$eGFR<-142*(GFR_male$stad1min)^-0.302*(GFR_male$stad1max)^-1.2*0.9938^(GFR_male$age)*1
+GFR_male<-GFR_male[GFR_male$gender==1,]
+GFR<-rbind(GFR_male,GFR_female)
+GFR<-GFR[!is.na(GFR$eGFR),]
+GFR<-GFR[!is.infinite(GFR$eGFR),]
+pro_cr_data<-GFR[,c("ID", "Cr", "Upro", "mon", "eGFR")]
+# first base GFR
+GFR<-sqldf("SELECT * FROM GFR ORDER BY ID,mon ASC")
+GFR_first<-sqldf("SELECT ID,eGFR,mon FROM GFR GROUP BY ID")
+names(GFR_first)<-c("ID","eGFR_first","eGFR_first_mon")
+GFR<-sqldf("SELECT * FROM GFR ORDER BY ID,mon DESC")
+GFR_last<-sqldf("SELECT ID,eGFR,mon FROM GFR GROUP BY ID")
+names(GFR_last)<-c("ID","eGFR_last","eGFR_last_mon")
+GFR<-merge(GFR_first,GFR_last,by="ID",all.x = T)
+basdatanew<-merge(basdatanew,GFR,by="ID",all.x = T)
+#CR
+CR<-mydata1[,c( "ID","mon","Cr")]
+CR<-CR[!is.na(CR$Cr),]
+CR<-CR[!CR$Cr==0,]
+names(CR)<-c( "ID","mon","Cr")
+CR<-sqldf("SELECT * FROM CR ORDER BY ID,mon ASC")
+cr_first<-sqldf("SELECT * FROM CR GROUP BY ID")
+names(cr_first)<-c("ID","Cr_first_mon","Cr_first")
+pro_cr_data<-merge(pro_cr_data,cr_first,by="ID",all.x = T)
+CR<-sqldf("SELECT * FROM CR ORDER BY ID,mon DESC")
+cr_last<-sqldf("SELECT * FROM CR GROUP BY ID")
+names(cr_last)<-c("ID","Cr_last_mon","Cr_last")
+crdata<-merge(cr_first,cr_last,by="ID",all.x = T)
+basdatanew<-merge(basdatanew,crdata,by="ID",all.x = T)
+####urine_pro
+prodata<-data.frame(ID=mydata1$ID,mon=mydata1$mon,Upro=mydata1$Upro)
+prodata<-prodata[!is.na(prodata$Upro),]
+prodata<-sqldf("SELECT * FROM prodata ORDER BY ID,mon ASC")
+pro_first<-sqldf("SELECT * FROM prodata GROUP BY ID")
+names(pro_first)<-c("ID","Upro_first_mon","Upro_first")
+prodata<-sqldf("SELECT * FROM prodata ORDER BY ID,mon DESC")
+pro_last<-sqldf("SELECT * FROM prodata GROUP BY ID")
+names(pro_last)<-c("ID","Upro_last_mon","Upro_last")
+basdatanew<-merge(basdatanew,pro_last,by="ID",all.x = T)
+pro_cr_data<-merge(pro_cr_data,pro_first,by="ID",all.x = T)
+####判断CR终点
+pro_cr_data<-pro_cr_data[!pro_cr_data$mon==0,] ##去掉基线对后续终点进行分析
+pro_cr_data$Res_CR<-ifelse(pro_cr_data$Upro<=0.5&pro_cr_data$eGFR>90,"CR","0")
+####判断PR终点
+pro_cr_data<-pro_cr_data[!pro_cr_data$Upro_first==0,]
+pro_cr_data$dec_perc<-(pro_cr_data$Upro_first-pro_cr_data$Upro)/pro_cr_data$Upro_first
+pro_dec_perc<-sqldf("SELECT * FROM pro_cr_data ORDER BY ID,mon DESC")
+pro_dec_perc<-sqldf("SELECT * FROM pro_dec_perc GROUP BY ID")
+pro_dec_perc<-data.frame(ID=pro_dec_perc$ID,pro_dec_perc=pro_dec_perc$dec_perc) #尿蛋白下降百分比
+basdatanew<-merge(basdatanew,pro_dec_perc,by="ID",all.x = T)
+pro_cr_data$pr_Upro<-ifelse(pro_cr_data$dec_perc>=0.5 & pro_cr_data$Upro<3,"1","0") ##蛋白下降大于50% 且小于3
+pro_cr_data$cr_increase<-(pro_cr_data$Cr-pro_cr_data$Cr_first)/pro_cr_data$Cr_first
+pro_cr_data$cr_increase<-(pro_cr_data$Cr-pro_cr_data$Cr_first)/pro_cr_data$Cr_first
+cr_increase<-pro_cr_data[,c("ID","mon","cr_increase")]
+cr_increase<-sqldf("SELECT * FROM cr_increase ORDER BY ID,mon DESC")
+cr_increase<-sqldf("SELECT * FROM cr_increase GROUP BY ID")
+basdatanew<-merge(basdatanew,cr_increase,by="ID",all.x = T)
+pro_cr_data$pr_Upro<-ifelse(pro_cr_data$dec_perc>=0.5 & pro_cr_data$Upro<3|pro_cr_data$Upro<0.5,"1","0")##蛋白下降大于50% 且小于3或<=0.5
+pro_cr_data$pr_Cr<-ifelse(pro_cr_data$cr_increase<=0.25,"1","0") ##肌酐稳定在25%,不升高25%但是可以降低
+pro_cr_data$Res_PR<-ifelse(pro_cr_data$pr_Upro==1 & pro_cr_data$pr_Cr==1 & pro_cr_data$Res_CR==0,"PR","0")
+pro_cr_data$Res_NR<-ifelse(pro_cr_data$Res_CR==0 & pro_cr_data$Res_PR==0,"NR","0")
+pro_cr_data$res_wash<-paste(pro_cr_data$Res_CR,pro_cr_data$Res_PR,pro_cr_data$Res_NR,sep = "")
+table(pro_cr_data$res_wash)
+pro_cr_data$res_wash<-str_replace_all(pro_cr_data$res_wash,"0","")
+pro_cr_data$res_wash<-str_replace_all(pro_cr_data$res_wash,"NA","")
+##response的时间
+pro_CR<-pro_cr_data[pro_cr_data$res_wash=="CR",]
+pro_CR<-sqldf("SELECT * FROM pro_CR ORDER BY ID,mon ASC")
+pro_CR<-sqldf("SELECT * FROM pro_CR GROUP BY ID")
+pro_CR<-data.frame(ID=pro_CR$ID,res_mon=pro_CR$mon,res_wash="CR") #CR_mon。。。
+pro_cr_data1<-pro_cr_data[!pro_cr_data$ID %in% pro_CR$ID,] #去掉CR病例
+pro_PR<-pro_cr_data1[pro_cr_data1$res_wash=="PR",]
+pro_PR<-sqldf("SELECT * FROM pro_PR ORDER BY ID,mon ASC")
+pro_PR<-sqldf("SELECT * FROM pro_PR GROUP BY ID")
+pro_PR<-data.frame(ID=pro_PR$ID,res_mon=pro_PR$mon,res_wash="PR") #PR_mon。。。
+pro_cr_data1<-pro_cr_data1[!pro_cr_data1$ID %in% pro_PR$ID,] #再去掉PR病例
+pro_NR<-pro_cr_data1[pro_cr_data1$res_wash=="NR",]
+pro_NR<-sqldf("SELECT * FROM pro_NR ORDER BY ID,mon DESC")
+pro_NR<-sqldf("SELECT * FROM pro_NR GROUP BY ID")
+pro_NR<-data.frame(ID=pro_NR$ID,res_mon=pro_NR$mon,res_wash="NR") #NR_mon。。。
+res_mon<-rbind(pro_CR,pro_PR,pro_NR)
+basdatanew<-merge(basdatanew,res_mon,by="ID",all.x = T)
+table(basdatanew$res_wash)
+basdatanew$CRmon<-ifelse(basdatanew$res_wash=="CR",basdatanew$res_mon,NA)
+basdatanew$PRmon<-ifelse(basdatanew$res_wash=="PR",basdatanew$res_mon,NA)
+basdatanew$NRmon<-ifelse(basdatanew$res_wash=="NR",basdatanew$res_mon,NA)
+basdatanew$cr10<-ifelse(basdatanew$cr_increase>0.10,"1","0")
+basdatanew$cr15<-ifelse(basdatanew$cr_increase>0.15,"1","0")
+basdatanew$cr20<-ifelse(basdatanew$cr_increase>0.20,"1","0")
+basdatanew$cr25<-ifelse(basdatanew$cr_increase>0.25,"1","0")
+basdatanew$cr30<-ifelse(basdatanew$cr_increase>0.30,"1","0")
+basdatanew$cr40<-ifelse(basdatanew$cr_increase>0.40,"1","0")
+basdatanew$cr50<-ifelse(basdatanew$cr_increase>0.50,"1","0")
+# write.xlsx(pro_cr_data,"pro_cr_data.xlsx")
+
+# save(mydata1,pro_cr_data,basdatanew,file = "derivation.Rdata")
+
+str(basdatanew)
+table(basdatanew$res_wash)
+# cr_max<-sqldf("SELECT ID,mon,upro24,max(Cr) FROM CR GROUP BY ID")
+# average_maxtime<-sqldf("SELECT ID,max(mon) FROM mydata GROUP BY ID")
+```
+
+```{r xydata_external validataion}
+xydat<-read.xlsx("5.LN_随访数据_for ZDT_20211205.xlsx",sheet=2)
+xydat<-xydat[!xydat$del=="1",]
+names(xydat)
+xybasdat<-xydat[,c(1,3,4,7,8,9,12)]
+names(xybasdat)[7]<-"UP24H"
+xybasdat$UP24H<-round(xybasdat$UP24H/1000,2)
+xy0mon<-xydat[,c(1,10:12)]
+xy3mon<-xydat[,c(1,13:15)]
+xy6mon<-xydat[,c(1,16:18)]
+xy12mon<-xydat[,c(1,19:21)]
+xy24mon<-xydat[,c(1,22:24)]
+xymydata<-rbind(xy0mon,xy3mon,xy6mon,xy12mon,xy24mon)
+xymydata$`24hUP`<-round(xymydata$`24hUP`/1000,2)
+xymydata<-xymydata[!is.na(xymydata$`实际时间`),]
+xymydata<-xymydata[!is.na(xymydata$`24hUP`),]
+names(xymydata)<-c("ID", "mon", "Cr", "Upro")
+xymydata<-xymydata[!xymydata$mon>25,]
+
+xybasdat<-xybasdat[!is.na(xybasdat$Alb),]
+xybasdat<-xybasdat[!is.na(xybasdat$sleduration),]
+xybasdat<-xybasdat[!is.na(xybasdat$UP24H),]
+xybasdat<-xybasdat[!is.na(xybasdat$age),]
+xybasdat<-xybasdat[!grepl("临床",xybasdat$LN_class),]
+xybasdat<-xybasdat[!grepl("免疫",xybasdat$LN_class),]
+id<-unique(xybasdat$ID)
+
+xymydata<-xymydata[xymydata$ID %in% id,]
+
+##
+average_maxtime<-sqldf("SELECT ID,max(mon) FROM xymydata GROUP BY ID") #follow-up time
+average_maxfollmean<-mean(average_maxtime$`max(mon)`) #17.5
+summary(average_maxtime$`max(mon)`)
+
+count<-as.data.frame(table(xymydata$ID)) #197 observations ??
+average_visit<-mean(count$Freq) #average_visit 7.7
+summary(count$Freq)
+# 
+agesex<-xybasdat[,c("ID","age","gender" )]
+xymydata<-merge(xymydata,agesex,by="ID",all.x = T)
+
+##GFR female
+GFR_female<-data.frame(ID=xymydata$ID,age=xymydata$age,gender=xymydata$gender,stad1=(xymydata$Cr/88.4)/0.7,Cr=xymydata$Cr,Upro=xymydata$Upro,mon=xymydata$mon)  #
+GFR_female$one<-1
+GFR_female$stad1min<-apply(GFR_female[,c("stad1","one")],1,min)
+GFR_female$stad1max<-apply(GFR_female[,c("stad1","one")],1,max)
+GFR_female$eGFR<-142*(GFR_female$stad1min)^-0.241*(GFR_female$stad1max)^-1.2*0.9938^(GFR_female$age)*1.012  #
+GFR_female<-GFR_female[GFR_female$gender==0,]
+
+
+# male
+GFR_male<-data.frame(ID=xymydata$ID,age=xymydata$age,gender=xymydata$gender,stad1=(xymydata$Cr/88.4)/0.9,Cr=xymydata$Cr,Upro=xymydata$Upro,mon=xymydata$mon)  #
+GFR_male$one<-1
+GFR_male$stad1min<-apply(GFR_male[,c("stad1","one")],1,min)
+GFR_male$stad1max<-apply(GFR_male[,c("stad1","one")],1,max)
+GFR_male$eGFR<-142*(GFR_male$stad1min)^-0.302*(GFR_male$stad1max)^-1.2*0.9938^(GFR_male$age)*1
+GFR_male<-GFR_male[GFR_male$gender==1,]
+GFR<-rbind(GFR_male,GFR_female)
+GFR<-GFR[!is.na(GFR$eGFR),]
+GFR<-GFR[!is.infinite(GFR$eGFR),]
+pro_cr_data<-GFR[,c("ID", "Cr", "Upro", "mon", "eGFR")]
+# first base GFR
+GFR<-sqldf("SELECT * FROM GFR ORDER BY ID,mon ASC")
+GFR_first<-sqldf("SELECT ID,eGFR,mon FROM GFR GROUP BY ID")
+names(GFR_first)<-c("ID","eGFR_first","eGFR_first_mon")
+GFR<-sqldf("SELECT * FROM GFR ORDER BY ID,mon DESC")
+GFR_last<-sqldf("SELECT ID,eGFR,mon FROM GFR GROUP BY ID")
+names(GFR_last)<-c("ID","eGFR_last","eGFR_last_mon")
+GFR<-merge(GFR_first,GFR_last,by="ID",all.x = T)
+xybasdat<-merge(xybasdat,GFR,by="ID",all.x = T)
+
+#CR
+CR<-xymydata[,c( "ID","mon","Cr")]
+CR<-CR[!is.na(CR$Cr),]
+CR<-CR[!CR$Cr==0,]
+names(CR)<-c( "ID","mon","Cr")
+CR<-sqldf("SELECT * FROM CR ORDER BY ID,mon ASC")
+cr_first<-sqldf("SELECT * FROM CR GROUP BY ID")
+names(cr_first)<-c("ID","Cr_first_mon","Cr_first")
+pro_cr_data<-merge(pro_cr_data,cr_first,by="ID",all.x = T)
+CR<-sqldf("SELECT * FROM CR ORDER BY ID,mon DESC")
+cr_last<-sqldf("SELECT * FROM CR GROUP BY ID")
+names(cr_last)<-c("ID","Cr_last_mon","Cr_last")
+crdata<-merge(cr_first,cr_last,by="ID",all.x = T)
+xybasdat<-merge(xybasdat,crdata,by="ID",all.x = T)
+
+####urine_pro
+prodata<-data.frame(ID=xymydata$ID,mon=xymydata$mon,Upro=xymydata$Upro)
+prodata<-prodata[!is.na(prodata$Upro),]
+prodata<-sqldf("SELECT * FROM prodata ORDER BY ID,mon ASC")
+pro_first<-sqldf("SELECT * FROM prodata GROUP BY ID")
+names(pro_first)<-c("ID","Upro_first_mon","Upro_first")
+prodata<-sqldf("SELECT * FROM prodata ORDER BY ID,mon DESC")
+pro_last<-sqldf("SELECT * FROM prodata GROUP BY ID")
+names(pro_last)<-c("ID","Upro_last_mon","Upro_last")
+xybasdat<-merge(xybasdat,pro_last,by="ID",all.x = T)
+pro_cr_data<-merge(pro_cr_data,pro_first,by="ID",all.x = T) ####判断CR终点
+pro_cr_data<-pro_cr_data[!pro_cr_data$mon==0,] ##去掉基线对后续终点进行分析
+pro_cr_data$Res_CR<-ifelse(pro_cr_data$Upro<=0.5&pro_cr_data$eGFR>90,"CR","0")
+####判断PR终点
+pro_cr_data<-pro_cr_data[!pro_cr_data$Upro_first==0,]
+pro_cr_data$dec_perc<-(pro_cr_data$Upro_first-pro_cr_data$Upro)/pro_cr_data$Upro_first
+pro_dec_perc<-sqldf("SELECT * FROM pro_cr_data ORDER BY ID,mon DESC")
+pro_dec_perc<-sqldf("SELECT * FROM pro_dec_perc GROUP BY ID")
+pro_dec_perc<-data.frame(ID=pro_dec_perc$ID,pro_dec_perc=pro_dec_perc$dec_perc) #尿蛋白下降百分比
+xybasdat<-merge(xybasdat,pro_dec_perc,by="ID",all.x = T)
+pro_cr_data$pr_Upro<-ifelse(pro_cr_data$dec_perc>=0.5 & pro_cr_data$Upro<3,"1","0") ##蛋白下降大于50% 且小于3
+pro_cr_data$cr_increase<-(pro_cr_data$Cr-pro_cr_data$Cr_first)/pro_cr_data$Cr_first
+pro_cr_data$cr_increase<-(pro_cr_data$Cr-pro_cr_data$Cr_first)/pro_cr_data$Cr_first
+cr_increase<-pro_cr_data[,c("ID","mon","cr_increase")]
+cr_increase<-sqldf("SELECT * FROM cr_increase ORDER BY ID,mon DESC")
+cr_increase<-sqldf("SELECT * FROM cr_increase GROUP BY ID")
+xybasdat<-merge(xybasdat,cr_increase,by="ID",all.x = T)
+pro_cr_data$pr_Upro<-ifelse(pro_cr_data$dec_perc>=0.5 & pro_cr_data$Upro<3|pro_cr_data$Upro<0.5,"1","0")##蛋白下降大于50% 且小于3或<=0.5
+pro_cr_data$pr_Cr<-ifelse(pro_cr_data$cr_increase<=0.25,"1","0") ##肌酐稳定在25%,不升高25%但是可以降低
+pro_cr_data$Res_PR<-ifelse(pro_cr_data$pr_Upro==1 & pro_cr_data$pr_Cr==1 & pro_cr_data$Res_CR==0,"PR","0")
+pro_cr_data$Res_NR<-ifelse(pro_cr_data$Res_CR==0 & pro_cr_data$Res_PR==0,"NR","0")
+pro_cr_data$res_wash<-paste(pro_cr_data$Res_CR,pro_cr_data$Res_PR,pro_cr_data$Res_NR,sep = "")
+table(pro_cr_data$res_wash)
+pro_cr_data$res_wash<-str_replace_all(pro_cr_data$res_wash,"0","")
+pro_cr_data$res_wash<-str_replace_all(pro_cr_data$res_wash,"NA","")
+##response的时间
+pro_CR<-pro_cr_data[pro_cr_data$res_wash=="CR",]
+pro_CR<-sqldf("SELECT * FROM pro_CR ORDER BY ID,mon ASC")
+pro_CR<-sqldf("SELECT * FROM pro_CR GROUP BY ID")
+pro_CR<-data.frame(ID=pro_CR$ID,res_mon=pro_CR$mon,res_wash="CR") #CR_mon。。。
+pro_cr_data1<-pro_cr_data[!pro_cr_data$ID %in% pro_CR$ID,] #去掉CR病例
+pro_PR<-pro_cr_data1[pro_cr_data1$res_wash=="PR",]
+pro_PR<-sqldf("SELECT * FROM pro_PR ORDER BY ID,mon ASC")
+pro_PR<-sqldf("SELECT * FROM pro_PR GROUP BY ID")
+pro_PR<-data.frame(ID=pro_PR$ID,res_mon=pro_PR$mon,res_wash="PR") #PR_mon。。。
+pro_cr_data1<-pro_cr_data1[!pro_cr_data1$ID %in% pro_PR$ID,] #再去掉PR病例
+pro_NR<-pro_cr_data1[pro_cr_data1$res_wash=="NR",]
+pro_NR<-sqldf("SELECT * FROM pro_NR ORDER BY ID,mon DESC")
+pro_NR<-sqldf("SELECT * FROM pro_NR GROUP BY ID")
+pro_NR<-data.frame(ID=pro_NR$ID,res_mon=pro_NR$mon,res_wash="NR") #NR_mon。。。
+res_mon<-rbind(pro_CR,pro_PR,pro_NR)
+xybasdat<-merge(xybasdat,res_mon,by="ID",all.x = T)
+table(xybasdat$res_wash)/123
+
+
+
+xybasdat$CRmon<-ifelse(xybasdat$res_wash=="CR",xybasdat$res_mon,NA)
+xybasdat$PRmon<-ifelse(xybasdat$res_wash=="PR",xybasdat$res_mon,NA)
+xybasdat$NRmon<-ifelse(xybasdat$res_wash=="NR",xybasdat$res_mon,NA)
+xybasdat$cr10<-ifelse(xybasdat$cr_increase>0.10,"1","0")
+xybasdat$cr15<-ifelse(xybasdat$cr_increase>0.15,"1","0")
+xybasdat$cr20<-ifelse(xybasdat$cr_increase>0.20,"1","0")
+xybasdat$cr25<-ifelse(xybasdat$cr_increase>0.25,"1","0")
+xybasdat$cr30<-ifelse(xybasdat$cr_increase>0.30,"1","0")
+xybasdat$cr40<-ifelse(xybasdat$cr_increase>0.40,"1","0")
+xybasdat$cr50<-ifelse(xybasdat$cr_increase>0.50,"1","0")
+
+
+xypro_cr_data<-pro_cr_data
+
+# save(xybasdat,xypro_cr_data,xymydata,file = "xyvalidat.Rdata")
+```
+
+
+```{r normalization of urine portein values}
+load(file = "derivation.Rdata")
+load(file = "xyvalidat.Rdata")
+library(car)
+library(pander)
+library(forecast)
+library(zoo)
+
+testdata<-mydata
+beforenor<-testdata$Upro
+testdata$Upro<-testdata$Upro+0.01
+a<-na.omit(testdata$Upro)
+BoxCox.lambda(a,method="loglik")
+summary(powerTransform(a))
+afternor=bcPower(a,0.2) #normalization
+
+#histogram of urine protein level before normalization and after normalization
+par(mfrow=c(1,2))
+hist(beforenor, cex.main=0.8, cex.lab=0.8,main = "before normalization",)
+hist(afternor, cex.main=0.8, cex.lab=0.8,main = "after normalization",)
+
+
+# mydata$year <- mydata$mon/12
+# save(list = ls(all.names = TRUE),file = "bas.Rdata",envir = .GlobalEnv)
+```
+
+###LCMM
+
+```{r STEP1 justifying the selection of a random-effect structure in the scoping model}
+#############################################################
+mydata$Upro<-beforenor
+# mydata$Upro<-afternor
+# mydata$year <- round(mydata$mon/12,1)
+mydata$year <- mydata$mon/12
+
+#> Loading required package: survival
+testmodel <- hlme(Upro~year+I(year^2),mixture = ~year+I(year^2),
+                  random=~-1,subject="ID",ng=3,data=mydata)
+
+summary(testmodel)
+#reference  https://rpubs.com/hlennon/LCTMtoolsvignette
+
+colorall<-c("#7876B1FF","#BC3C29FF","#E18727FF")
+residualplot_step1 <- function (model, nameofoutcome, nameofage, data, 
+            ylimit = c(-50, 50)) 
+{
+                    require(dplyr)
+                    k <- model$ng
+                    preds <- model$pred
+                    names(preds)[6] <- nameofoutcome
+                    nameofid <- names(model$pred)[1]
+                    test <- dplyr::left_join(preds, model$pprob, .by = nameofid)
+                    test <- cbind(test,data[,c(2,4)])
+                     # dplyr::left_join(test, data, .by = c(nameofid, nameofoutcome))
+                    plotvalues <- NULL
+                    for (i in 1:k) {
+                                        colour<-colorall[i]
+                                        newplotvalues <- test %>% filter(class == i) %>% mutate(Residuals = get(nameofoutcome) - 
+                                                                                                                    eval(parse(text = paste0("pred_ss", i))))
+                                        plotvalues <- rbind(plotvalues, newplotvalues)
+                                        plotvaluessub <- plotvalues %>% filter(class == i)
+                                        pname <- paste0("p", i)
+                                        assign(pname, ggplot2::ggplot(data = plotvaluessub, aes(x = get(nameofage), 
+                                                                                                y = Residuals, group = class)) + theme(axis.text = element_text(size = 16), 
+                                                                                                                                       text = element_text(size = 16)) + geom_point(colour=colour,shape=21,size=1,fill=colour,alpha = 0.4)  
+                                               
+                                               
+                                               +geom_smooth(method="loess",colour=colour,alpha = 0.6,se = FALSE,size=1.3)
+          # + stat_summary(fun.y = mean, geom = "line", size = 3, col = "CadetBlue", group = 1) 
+          + ggtitle("Residuals in class", i) + ylim(ylimit))
+                                        print(eval(parse(text = (paste0("p", i)))))
+                                        plotname <- paste0("p", i, ".pdf")
+                                        ggplot2::ggsave(filename = plotname)
+                    }
+                    return(as.list(get(dput(paste0("p", 1:k)))))
+}
+
+residualplot_step1( testmodel, nameofoutcome="Upro",nameofage = "year",
+                    data = mydata,ylimit=c(-5,5))
+```
+
+```{r Step 2 determine the optimal number of classes based on BIC}
+mydata$Upro<-beforenor
+# mydata$Upro<-afternor
+mydata$year <- round(mydata$mon/12,2)
+
+
+mlc1 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata)
+
+mlc2 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 2)
+
+mlc3 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 3)
+
+mlc4 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 4)
+
+mlc5 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 5)
+
+mlc6 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 6)
+
+mlc7 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 7)
+
+mlc8 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 8)
+
+mlc9 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 9)
+
+mlc10 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 10)
+
+# save(mlc1,mlc2,mlc3,mlc4,mlc5,mlc6,mlc7,mlc8,mlc9,mlc10,file = "./figures/time2_lcmm_optimalnumber.Rdata")
+load("./figures/time2_lcmm_optimalnumber.Rdata")
+model_num<-summarytable(mlc1,mlc2,mlc3,mlc4,mlc5,mlc6,mlc7,mlc8,mlc9,mlc10,which = c("G", "loglik", "conv", "npm", "AIC", "BIC", "SABIC", "entropy", "%class"))
+write.xlsx(model_num,file = "./figures/time2_lcmm_optimalnumber_194.xlsx")
+```
+
+
+```{r LCMM  Step 3&4 refine the model_with original 24h urine protein}
+mydata$Upro<-beforenor
+# mydata$Upro<-afternor
+mydata$year <- round(mydata$mon/12,2)
+
+##beforenor degree=1 linear
+bl1 <- lcmm(Upro ~ poly(year, degree = 1, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 1, raw = TRUE), ng = 4)
+
+##beforenor degree=2 linear
+bl2 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 4)
+
+##beforenor degree=3 linear
+bl3 <- lcmm(Upro ~ poly(year, degree = 3, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 3, raw = TRUE), ng = 4)
+
+##beforenor degree=1 beta
+bb1 <- lcmm(Upro ~ poly(year, degree = 1, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 1, raw = TRUE), ng = 4, link = "beta")
+
+##beforenor degree=2 beta
+bb2 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 4, link = "beta")
+
+##beforenor degree=3 beta
+bb3 <- lcmm(Upro ~ poly(year, degree = 3, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 3, raw = TRUE), ng = 4, link = "beta")
+
+# save(bl1,bl2,bl3,bb1,bb2,bb3,file="./figures/refine_beforenormal.Rdata")
+```
+
+```{r LCMM  Step 3&4 refine the model_with normalized 24h upro}
+mydata$Upro<-afternor
+mydata$year <- round(mydata$mon/12,2)
+
+##afternor degree=1 linear
+bl1 <- lcmm(Upro ~ poly(year, degree = 1, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 1, raw = TRUE), ng = 4)
+
+##afternor degree=2 linear
+bl2 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 4)
+
+##afternor degree=3 linear
+bl3 <- lcmm(Upro ~ poly(year, degree = 3, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 3, raw = TRUE), ng = 4)
+
+##afternor degree=1 beta
+bb1 <- lcmm(Upro ~ poly(year, degree = 1, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 1, raw = TRUE), ng = 4, link = "beta")
+
+##afternor degree=2 beta
+bb2 <- lcmm(Upro ~ poly(year, degree = 2, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 2, raw = TRUE), ng = 4, link = "beta")
+
+##afternor degree=3 beta
+bb3 <- lcmm(Upro ~ poly(year, degree = 3, raw = TRUE),random = ~ year, subject = "ID", data = mydata, mixture =~ poly(year, degree = 3, raw = TRUE), ng = 4, link = "beta")
+
+# save(bl1,bl2,bl3,bb1,bb2,bb3,file="./figures/refine_afternormal.Rdata")
+```
+
+```{r LCMM Step 3&4 compare the refined models}
+load("./figures/refine_beforenormal.Rdata")
+model_refine1<-summarytable(bl1,bl2,bl3,bb1,bb2,bb3,which = c("G", "loglik", "conv", "npm", "AIC", "BIC", "SABIC", "entropy", "%class"))
+model_refine1<-as.data.frame(model_refine1)
+model_refine1$urinepro<-"beforenor"
+model_refine1$time<-c("linear","Quadratic","Cubic","linear","Quadratic","Cubic")
+model_refine1$spline<-c("linear","linear","linear","beta","beta","beta")
+write.xlsx(model_refine1,file = "./figures/refine_beforenormal.xlsx")
+
+load("./figures/refine_afternormal.Rdata")
+model_refine2<-summarytable(bl1,bl2,bl3,bb1,bb2,bb3,which = c("G", "loglik", "conv", "npm", "AIC", "BIC", "SABIC", "entropy", "%class"))
+model_refine2<-as.data.frame(model_refine2)
+model_refine2$urinepro<-"afternor"
+model_refine2$time<-c("linear","Quadratic","Cubic","linear","Quadratic","Cubic")
+model_refine2$spline<-c("linear","linear","linear","beta","beta","beta")
+
+model_refine<-rbind(model_refine1,model_refine2)
+write.xlsx(model_refine,file = "./figures/refine_model4G.xlsx")
+##bb3 had lowest BIC
+
+mydata$Upro<-beforenor
+# mydata$Upro<-afternor
+mydata$year <- round(mydata$mon/12,2)
+?LCTMtoolkit
+
+load("./figures/refine_beforenormal.Rdata")
+LCTMtoolkit(bb3) 
+29.443/10
+lcmm::postprob( bb3 )
+
+# Posterior classification: 
+#   class1 class2 class3 class4
+# N  49.00  47.00  57.00  41.00
+# %  25.26  24.23  29.38  21.13
+#  
+# Posterior classification table: 
+#      --> mean of posterior probabilities in each class 
+#         prob1  prob2  prob3  prob4
+# class1 0.7983 0.0708 0.1250 0.0059
+# class2 0.0635 0.7521 0.0304 0.1540
+# class3 0.1335 0.0253 0.8366 0.0046
+# class4 0.0102 0.1218 0.0249 0.8430
+#  
+# Posterior probabilities above a threshold (%): 
+#          class1 class2 class3 class4
+# prob>0.7  65.31  61.70  77.19  75.61
+# prob>0.8  59.18  46.81  61.40  65.85
+# prob>0.9  40.82  34.04  54.39  53.66
+#  
+
+summary(bb3)
+```
+
+```{r load basdata and LCMM results}
+load("./figures/refine_beforenormal.Rdata")
+load("bas.Rdata")
+mydata$Upro<-beforenor
+```
+
+```{r STEP5-graphical presentation-Plot mean trajectories with 95% predictive intervals across time for each class in a single graph.}
+plot(bb3, which="fit", var.time="mon", marg=FALSE, ylim=c(-6,1),shades = TRUE)
+
+pdf(file ="./figures/ng=4.pdf",width = 10,height=9,title = "trajectory")
+plot(bb3, which="fit", var.time="mon", marg=FALSE, ylim=c(-6,1),shades = TRUE)
+dev.off()
+
+png(file = "./figures/ng=4.png", bg = "transparent")
+plot(bb3, which="fit", var.time="mon", marg=FALSE, ylim=c(-6,1),shades = TRUE)
+dev.off()
+
+# datnew   <- data.frame(year = seq(0, 2, length = 500))
+# plotpred <- predictY(bb3, datnew, var.time ="year", draws = TRUE)
+# plot(plotpred, lty=1, xlab="year", ylab="24h-Upro", cex=0.75)
+```
+
+```{r STEP5-graphical presentation-individual level ‘spaghetti plots’  }
+mydata$Upro<-beforenor
+## output
+class4<-bb3$pprob
+write.xlsx(class4,"./figures/class4_bb3_ng4_194.xlsx")
+
+#class4-----------------------
+class4c1<-class4$ID[class4$class==1]
+class4c2<-class4$ID[class4$class==2]
+class4c3<-class4$ID[class4$class==3]
+class4c4<-class4$ID[class4$class==4]
+
+dat_c1<-mydata[mydata$ID %in% class4c1,]
+dat_c2<-mydata[mydata$ID %in% class4c2,]
+dat_c3<-mydata[mydata$ID %in% class4c3,]
+dat_c4<-mydata[mydata$ID %in% class4c4,]
+
+#subclass---------------------------------
+# layout(matrix(c(1,2,3,4), 2, 2))
+# "#BC3C29FF" "#0072B5FF" "#E18727FF" "#20854EFF" "#7876B1FF" "#6F99ADFF" "#FFDC91FF" "#EE4C97FF" 
+
+xyplot(Upro ~ mon, dat_c1, groups = ID, col="black", lwd=2, type="l")
+xyplot(Upro ~ mon, dat_c2, groups = ID, col="#BC3C29FF", lwd=2, type="l") #red
+xyplot(Upro ~ mon, dat_c3, groups = ID, col="#20854EFF", lwd=2, type="l") #green
+xyplot(Upro ~ mon, dat_c4, groups = ID, col="#0072B5FF", lwd=2, type="l") #blue
+
+## 
+pdf(file ="./figures/c41.pdf",width = 10,height=7,title = "all")
+xyplot(Upro ~ mon, dat_c1, groups = ID, col="black", lwd=2, type="l")
+dev.off()
+
+pdf(file ="./figures/c42.pdf",width = 10,height=7,title = "all")
+xyplot(Upro ~ mon, dat_c2, groups = ID, col="#BC3C29FF", lwd=2, type="l")
+dev.off()
+
+pdf(file ="./figures/c43.pdf",width = 10,height=7,title = "all")
+xyplot(Upro ~ mon, dat_c3, groups = ID, col="#20854EFF", lwd=2, type="l")
+dev.off()
+
+pdf(file ="./figures/c44.pdf",width = 10,height=7,title = "all")
+xyplot(Upro ~ mon, dat_c4, groups = ID, col="#0072B5FF", lwd=2, type="l")
+dev.off()
+
+## spaghetti
+mydata2<-merge(mydata,class4[,c(1,2)],by="ID",all.x = T)
+library(ggplot2)
+names(mydata2)
+mydata2$class<-as.factor(mydata2$class)
+
+mydata2$class2<-mydata2$class
+mydata2$class2<-str_replace_all(mydata2$class2,"1","6ER_HB")
+mydata2$class2<-str_replace_all(mydata2$class2,"2","7LR")
+mydata2$class2<-str_replace_all(mydata2$class2,"3","5ER_LB")
+mydata2$class2<-str_replace_all(mydata2$class2,"4","8NR")
+ggplot(mydata2, aes(x = mon, y = Upro)) + geom_line(aes(color = class2,group = ID),alpha=0.7) + xlab("months") + ylab("24h-Urine protein")+ labs(color = "Class Assignment")+theme_classic()+ geom_hline(aes(yintercept=0.3), colour="#990000", linetype="dashed")
+
+ggplot2::ggsave(filename = "./figures/spaghetti_plots_4g.pdf",width = 6,height = 4)
+ggplot2::ggsave(filename = "./figures/spaghetti_plots_4g.png",width = 6,height = 4)
+```
+
+##STEP7 Assess for clinical characterisation and plausibility.
+
+```{r datapre_description of different groups_variables}
+##data pre 
+load("./figures/refine_beforenormal.Rdata")
+load("bas.Rdata")
+mydata$Upro<-beforenor
+class4<-bb3$pprob
+
+table(basdatanew$ID==class4$ID)
+data<-cbind(basdatanew,fclass4=class4[,c(2)])
+
+vars<-names(data);dput(vars)
+str(data)
+
+vars<-c("gender", "age", "age35", 
+        "sleduration", "LNduration", "newonsetLN",  "AKI","max(mon)","followup", 
+        "proliferate", "membrane", "LNCLASS", "LNCLASS_si",
+        "IorII", "III", "IV", "mix","V","TMA", 
+        "AI",  "CI", 
+        "debri", "wireloop", "necrosis", 
+        "cellcrescent", "fibrocrescent", "sclerosis", "TIsclerosis", "TIshrink",
+        "HB","PLT","UP24H","ALB","RBC", "CR","BNP", "DD",
+        "ESR", "CRP", "IGG", "C3", "C4", "DSdna","acl", "HTN",
+        "SLEDAI", "SLEDAI12", 
+        "Pred", "priois", "subis", 
+        "response", "noresponse","remissionmonth",  
+        "esrd", "die", "relapse",
+        "nopreIScurrentIS","IScurrentpre","CTX","MMF","response_all",
+        "fclass4","currentIS2nd", "montoshift",
+"eGFR_first", "eGFR_first_mon", "eGFR_last", "eGFR_last_mon", 
+"Cr_first_mon", "Cr_first", "Cr_last_mon", "Cr_last", "Upro_last_mon", 
+"Upro_last", "pro_dec_perc", "mon", "cr_increase", "res_mon", 
+"res_wash", "CRmon", "PRmon", "NRmon", "cr10", "cr15", "cr20", 
+"cr25", "cr30", "cr40", "cr50")
+
+factorvars<-c("gender", "age35","SLEDURATION5", 
+"newonsetLN",  "AKI", "proliferate", "membrane", "LNCLASS", "LNCLASS_si",
+"IorII", "III", "IV", "mix","V", "TMA", "TIsclerosis","debri", "wireloop", "necrosis", "HTN","acl", "SLEDAI12","response", "noresponse", "esrd", "die", "relapse","nopreIScurrentIS","IScurrentpre", "CTX","MMF","response_all","fclass4","currentIS2nd",
+"res_wash","cr10", "cr15", "cr20", "cr25", "cr30", "cr40", "cr50" )
+
+data[factorvars]<-lapply(data[factorvars],factor)
+numvars<-setdiff(vars,factorvars)
+data[numvars]<-lapply(data[numvars],as.numeric)
+
+#output for spss 2*c chi suqer
+spssdata<-data[,factorvars]
+write.csv(spssdata,"spssdata.csv")
+
+spssdata<-data[,c(numvars,"fclass4")]
+write.csv(spssdata,"spssdata_num.csv")
+
+
+
+data$fclass4 <-str_replace_all(data$fclass4 ,"2","5LR")
+data$fclass4 <-str_replace_all(data$fclass4 ,"1","2ER_HB")
+data$fclass4 <-str_replace_all(data$fclass4 ,"3","0ER_LB")
+data$fclass4 <-str_replace_all(data$fclass4,"4","6NR")
+
+data$res_mon[data$res_wash=="NR"]<-NA  ##res_mon 只包括PR和CR的
+```
+
+
+```{r ggbetweenstats boxplot}
+library(ggstatsplot)
+library(ggplot2)
+set.seed(123)
+
+# "eGFR_first", "eGFR_last",
+# "Cr_first_mon", "Cr_first", "Cr_last_mon", "Cr_last", "Upro_last_mon", 
+# "Upro_last", "pro_dec_perc", "mon", "cr_increase", "res_mon", 
+# "res_wash", "CRmon", "PRmon", "NRmon", "cr10", "cr15", "cr20",  "montoshift"
+# "cr25", "cr30", "cr40", "cr50"
+
+name<-"subis"
+sta<-data.frame(var=data[,name],fclass4=data$fclass4)
+# p.picture=paste("./figures/betweengroup/",name,"lnd","test.jpg",sep = "")
+# jpeg(p.picture)
+ggstatsplot::ggbetweenstats(
+  data = sta,
+  type="nonparametric",
+  pairwise.comparisons = TRUE, pairwise.display = "significant", 
+  p.adjust.method = "bonferroni",  #"holm" (default), "hochberg", "hommel", "bonferroni", "BH", "BY", "fdr", "none"
+  effsize.type = "unbiased",
+  x = fclass4,
+  y = var,
+  title = "Distribution of sepal length across Iris species")
+dev.off()
+
+
+sig<-c("age", "sleduration","LNduration","AI","cellcrescent","sclerosis", "TIshrink","UP24H","ALB","RBC","CR","BNP", "CRP","IGG",
+        "Pred", "priois", "subis", 
+       "remissionmonth")
+
+```
+
+
+```{r comparison of different groups}
+str(data)
+library("tableone")#baseline table
+a<-data
+#---------------------base----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE)#,nonnormal=numvars
+##exact=c("esrd","die","acl")#nonnormal = c() ,nonnormal =nonnormal_C2_res
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_baseline_mean.csv")
+excel<-read.csv("./figures/v3_baseline_mean.csv")
+write.xlsx(excel,"./figures/v3_baseline_mean.xlsx")
+table(a$response,a$relapse)
+table(a$response)
+############
+attach(a)
+table <- CreateTableOne(vars = vars, factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal=numvars)#
+##exact=c("esrd","die","acl")#nonnormal = c() ,nonnormal =nonnormal_C2_res
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_baseline_non.csv")
+excel<-read.csv("./figures/v3_baseline_non.csv")
+write.xlsx(excel,"./figures/v3_baseline_non.xlsx")
+table(a$response,a$relapse)
+table(a$response)
+16/(116+16)
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'fclass4', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal =numvars)##exact=c("esrd","die","acl")#nonnormal = c( )
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_class4_nonnor.csv")
+excel<-read.csv("./figures/v3_class4_nonnor.csv")
+write.xlsx(excel,"./figures/v3_class4_nonnor.xlsx")
+
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'fclass4', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal = c( ))##exact=c("esrd","die","acl")
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_class4_nor.csv")
+excel<-read.csv("./figures/v3_class4_nor.csv")
+write.xlsx(excel,"./figures/v3_class4_nor.xlsx")
+```
+
+
+```{r_imputation}
+library("naniar")
+library("mice")
+str(data)
+#有p值的
+
+varsneed<-c("gender", "age", "sleduration", "LNduration", "newonsetLN",  "AKI","followup", 
+        "proliferate", "membrane", "LNCLASS", "LNCLASS_si",
+        "IorII", "III", "IV", "mix","V","TMA", 
+        "AI",  "CI", 
+        "debri", "wireloop", "necrosis", 
+        "cellcrescent", "fibrocrescent", "sclerosis", "TIsclerosis", "TIshrink",
+        "HB","PLT","UP24H","ALB","RBC", "CR","BNP", "DD",
+        "ESR", "CRP", "IGG", "C3", "C4", "DSdna","acl", "HTN",
+        "SLEDAI", "SLEDAI12", 
+        "Pred", "priois", "subis", 
+        "response", "noresponse","remissionmonth",  
+        "esrd", "die", "relapse",
+        "nopreIScurrentIS","IScurrentpre","CTX","MMF","response_all",
+        "fclass4")
+
+
+basdatatree<-data[,varsneed]
+
+
+#priois
+f="basdatatree_out.Rdata"
+if(file.exists(f)==F){
+library(mice)
+miceMod <- mice(basdatatree[,!names(basdatatree) %in% "medv"], method="rf") #based on random forest
+basdatatree_out <- complete(miceMod);anyNA(basdatatree_out)
+save(basdatatree_out, file = "basdatatree_out.Rdata")
+write.csv(basdatatree_out, file = "basdatatree_out.csv")
+}
+
+```
+
+
+```{r multi_nom_all variabels with p_data_pre}
+load("./figures/refine_beforenormal.Rdata")
+load("bas.Rdata")
+mydata$Upro<-beforenor
+class4<-bb3$pprob
+table(basdatanew$ID==class4$ID)
+data<-cbind(basdatanew,fclass4=class4[,c(2)])
+load("basdatatree_out.Rdata")
+
+df<-basdatatree_out[,c("age", "sleduration","AI", "cellcrescent","sclerosis", "TIsclerosis","TIshrink","UP24H","ALB","RBC","CR",  "BNP","CRP","IGG","HTN","nopreIScurrentIS")]
+
+df_cor=cor(df)
+
+kappa(df_cor, exact=T)  ###1000 无多重共线性
+
+library(foreign)
+library(nnet)
+library(ggplot2)
+library(reshape2)
+
+basdatatree_out$fclass4<-as.factor(basdatatree_out$fclass4)
+```
+
+```{r multi_nom_all variabels with p_LB_ref}
+basdatatree_out$fclass4 <- relevel(basdatatree_out$fclass4, ref = "0ER_LB") 
+basdatatree_out$LNCLASS_si <- relevel(basdatatree_out$LNCLASS_si, ref = "mix") 
+
+
+dput(names(basdatatree_out))
+
+muldata1<-basdatatree_out[,c("age","gender","sleduration",  "LNduration", "newonsetLN", "AKI", "LNCLASS_si","AI", "debri", "cellcrescent", "sclerosis", "TIshrink", "TIsclerosis","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG", "HTN","priois", "fclass4")] 
+test <- multinom(muldata1$fclass4 ~ ., data = muldata1)
+
+
+#p
+z <- summary(test)$coefficients/summary(test)$standard.errors 
+p <- (1 - pnorm(abs(z), 0, 1)) * 2;p<-t(p);p<-as.data.frame(p)
+names(p)<-c("LRp_value","ERHBp_value","NRp_value")
+
+#OR
+OR<-exp(coef(test)); OR<-t(OR);OR<-as.data.frame(OR)
+names(OR)<-c("LROR","ERHBOR","NROR")
+CI<-exp(confint(test));CI<-as.data.frame(CI)
+names(CI)<-c("LR_lower", "LR_upper", "ERHB_lower", "ERHB_upper","NR_lower", "NR_upper")
+
+rownames(p)==rownames(OR);rownames(OR)==rownames(CI)
+out_mul1<-cbind(OR,CI,p)
+dput(names(out_mul1))
+out_mul1<-out_mul1[,c("ERHBOR","ERHB_lower",  "ERHB_upper",  "ERHBp_value",
+                      "LROR", "LR_lower", "LR_upper", "LRp_value", 
+                      "NROR", "NR_lower", "NR_upper", "NRp_value")]
+out_mul2<-lapply(out_mul1,function(x) round(x,2));out_mul2<-as.data.frame(out_mul2) ##round
+rownames(out_mul2)<-rownames(out_mul1)
+
+out_mul2$ERHBOR_95CI<-paste(out_mul2$ERHBOR," (",out_mul2$ERHB_lower,",",out_mul2$ERHB_upper,")",sep="")
+out_mul2$LROR_95CI<-paste(out_mul2$LROR," (",out_mul2$LR_lower,",",out_mul2$LR_upper,")",sep="")
+out_mul2$NROR_95CI<-paste(out_mul2$NROR," (",out_mul2$NR_lower,",",out_mul2$NR_upper,")",sep="")
+dput(names(out_mul2))
+out_mul2<-out_mul2[,c( "ERHBOR_95CI","ERHBp_value", "LROR_95CI","LRp_value", "NROR_95CI","NRp_value")]
+
+# write.xlsx(out_mul2,file="./figures/multino_bi_reg_round3_LBref.xlsx",row.names=T)
+write.xlsx(out_mul2,file="./figures/multino_bi_reg_round2_LBref.xlsx",row.names=T)
+
+head(pp <- fitted(test)) #probability
+
+```
+
+
+```{r multi_nom_all variabels with p_NR_ref}
+basdatatree_out$fclass4 <- relevel(basdatatree_out$fclass4, ref = "6NR") 
+basdatatree_out$LNCLASS_si <- relevel(basdatatree_out$LNCLASS_si, ref = "mix") 
+
+dput(names(basdatatree_out))
+muldata1<-basdatatree_out[,c("age","gender","sleduration",  "LNduration", "newonsetLN", "AKI", "LNCLASS_si","AI", "debri", "cellcrescent", "sclerosis", "TIshrink", "TIsclerosis","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG", "HTN","priois", "fclass4")] 
+test <- multinom(muldata1$fclass4 ~ ., data = muldata1)
+
+#p
+z <- summary(test)$coefficients/summary(test)$standard.errors 
+p <- (1 - pnorm(abs(z), 0, 1)) * 2;p<-t(p);p<-as.data.frame(p)
+names(p)<-c("ERLBp_value","LRp_value","ERHBp_value")
+
+#OR
+OR<-exp(coef(test)); OR<-t(OR);OR<-as.data.frame(OR)
+names(OR)<-c("ERLBOR","LROR","ERHBOR")
+CI<-exp(confint(test));CI<-as.data.frame(CI)
+names(CI)<-c("ERLB_lower", "ERLB_upper","LR_lower", "LR_upper", "ERHB_lower", "ERHB_upper")
+
+rownames(p)==rownames(OR);rownames(OR)==rownames(CI)
+out_mul1<-cbind(OR,CI,p)
+dput(names(out_mul1))
+out_mul1<-out_mul1[,c("ERLBOR", "ERLB_lower", "ERLB_upper", "ERLBp_value",
+                      "ERHBOR","ERHB_lower",  "ERHB_upper",  "ERHBp_value",
+                      "LROR", "LR_lower", "LR_upper", "LRp_value"
+                      )]
+out_mul2<-lapply(out_mul1,function(x) round(x,2));out_mul2<-as.data.frame(out_mul2) 
+##round
+rownames(out_mul2)<-rownames(out_mul1)
+
+out_mul2$ERHBOR_95CI<-paste(out_mul2$ERHBOR," (",out_mul2$ERHB_lower,",",out_mul2$ERHB_upper,")",sep="")
+out_mul2$LROR_95CI<-paste(out_mul2$LROR," (",out_mul2$LR_lower,",",out_mul2$LR_upper,")",sep="")
+out_mul2$ERLBOR_95CI<-paste(out_mul2$ERLBOR," (",out_mul2$ERLB_lower,",",out_mul2$ERLB_upper,")",sep="")
+dput(names(out_mul2))
+out_mul2<-out_mul2[,c( "ERHBOR_95CI","ERHBp_value", "LROR_95CI","LRp_value", "ERLBOR_95CI","ERLBp_value")]
+
+write.xlsx(out_mul2,file="./figures/multino_bi_reg_round2_NRref.xlsx",row.names=T)
+
+head(pp <- fitted(test)) #probability
+```
+
+
+```{r PCA}
+load("./figures/refine_beforenormal.Rdata")
+load("bas.Rdata")
+mydata$Upro<-beforenor
+class4<-bb3$pprob
+table(basdatanew$ID==class4$ID)
+data<-cbind(basdatanew,fclass4=class4[,c(2)])
+load("basdatatree_out.Rdata")
+
+write.xlsx(basdatatree_out,file = "PCA.xlsx")
+basdatatree_out<-read.xlsx("PCA_zdt.xlsx")
+
+dput(varneed)
+varneed<-names(basdatatree_out)
+
+numvars<-c("ID", "gender", "age", "sleduration", "LNduration", "newonsetLN", 
+"AKI", "IorII", "III", "IV", "mix", "V", 
+"AI", "debri", "cellcrescent", "sclerosis", "TIshrink", 
+"TIsclerosis", "UP24H", "ALB", "RBC", "CR", "BNP", "DD", "CRP", 
+"IGG", "HTN", "Pred", "priois", "MMF", "CTX", "SLEDAI", "fclass4")
+
+basdatatree_out1<-basdatatree_out[,numvars]
+
+basdatatree_out1[numvars]<-lapply(basdatatree_out1[numvars],as.numeric)
+
+summary(basdatatree_out1)
+library(ggfortify)
+pca1<-prcomp(basdatatree_out1[,c(-1,-33)],scale=T,rank=4,retx=T)  #相关矩阵分解 #retx表四返回score，scale表示要标准化
+
+summary(pca1) #方差解释度
+	pca1$sdev #特征值的开方
+	pca1$rotation #特征向量，回归系数
+	pca1$x #样本得分score
+basdatatree_out1$fclass4<-as.factor(basdatatree_out1$fclass4)
+autoplot(pca1,data = basdatatree_out1,col= 'fclass4',size=2,
+         loadings =T,loadings.label = TRUE,
+         frame = TRUE,frame.type='norm',
+         label = TRUE, label.size = 3
+)+  theme_classic()
+
+library("pca3d")
+# install.packages("pca3d",repos="https://mran.microsoft.com/snapshot/2019-02-01/") ##
+pca3d(pca1, group= basdatatree_out1[,33])
+?pca3d
+pca3d(pca1, group= basdatatree_out1[,33],
+     show.ellipses = T,ellipse.ci = 0.95,
+     show.group.labels = T,
+     show.shapes = TRUE,
+      axes.color= "white", new= TRUE)
+
+       #fancy= TRUE, 
+       # bg= "black",
+```
+
+```{r_decision tree}
+library(party)
+library(mlbench)
+
+str(muldata1)
+# muldata1$V<-as.numeric(muldata1$V)
+# muldata1$mix<-as.numeric(muldata1$mix)
+# 
+# muldata1$vmix<-muldata1$V+muldata1$mix
+# muldata1$vmix<-ifelse(muldata1$vmix<3,0,1)
+# 
+# muldata1$V<-as.factor(muldata1$V)
+# muldata1$mix<-as.factor(muldata1$mix)
+# muldata1$vmix<-as.factor(muldata1$vmix)
+
+str(muldata1)
+set.seed(12)
+ind <- sample(2, nrow(muldata1), replace=TRUE, prob=c(0.7, 0.3))
+trainData <- muldata1[ind==1,]
+testData <- muldata1[ind==2,]
+
+# trainData<-muldata1
+control<-ctree_control(mincriterion= 0.2)
+m1_ctree<-ctree(trainData$fclass4 ~., data = trainData,controls = control)
+table(predict(m1_ctree), trainData$fclass4)
+plot(m1_ctree)
+
+print(iris_ctree)
+
+plot(iris_ctree)
+str(muldata1)
+
+plot(m1_ctree)
+```
+
+###merge ER_HB,LR,NR and then compare them with ER_LB
+```{r merge_ER_LBvsOTHERS_variabels with p_data_pre}
+load("./figures/refine_beforenormal.Rdata")
+load("bas.Rdata")
+mydata$Upro<-beforenor
+class4<-bb3$pprob
+table(basdatanew$ID==class4$ID)
+data<-cbind(basdatanew,fclass4=class4[,c(2)])
+load("basdatatree_out.Rdata")
+
+df<-basdatatree_out[,c("age", "sleduration","AI", "cellcrescent","sclerosis", "TIshrink","UP24H","ALB","RBC","CR",  "BNP", "DD", "CRP","IGG","SLEDAI")]
+df_cor=cor(df)
+kappa(df_cor, exact=T)  ###1000 无多重共线性
+
+library(foreign)
+library(nnet)
+library(ggplot2)
+library(reshape2)
+
+basdatatree_out$fclass4 <-str_replace_all(basdatatree_out$fclass4 ,"2ER_HB","IR")
+basdatatree_out$fclass4 <-str_replace_all(basdatatree_out$fclass4 ,"5LR","IR")
+basdatatree_out$fclass4 <-str_replace_all(basdatatree_out$fclass4 ,"0ER_LB","ER_LB")
+basdatatree_out$fclass4 <-str_replace_all(basdatatree_out$fclass4,"6NR","IR")
+basdatatree_out$fclass4<-ifelse(basdatatree_out$fclass4=="IR",0,1)
+
+basdatatree_out$fclass4<-as.factor(basdatatree_out$fclass4)
+
+basdatatree_out$fclass4 <- relevel(basdatatree_out$fclass4, ref = "0") 
+basdatatree_out$LNCLASS_si <- relevel(basdatatree_out$LNCLASS_si, ref = "mix")
+```
+
+
+```{r external validation twocenter}
+xybasdat<-xybasdat[,c("ID", "age", "gender", "sleduration", "LN_class", "Alb", "UP24H",
+"eGFR_first", "eGFR_first_mon", "eGFR_last", "eGFR_last_mon",
+"Cr_first_mon", "Cr_first", "Cr_last_mon", "Cr_last", "Upro_last_mon",
+"Upro_last", "pro_dec_perc", "mon", "cr_increase", "res_mon",
+"res_wash", "CRmon", "PRmon", "NRmon", "cr10", "cr15", "cr20",
+"cr25", "cr30", "cr40", "cr50")]
+
+xybasdat$fclass4<-NA
+xybasdat$center<-"xy"
+xybasdat<-xybasdat[!is.na(xybasdat$Alb),]
+xybasdat<-xybasdat[!is.na(xybasdat$sleduration),]
+xybasdat<-xybasdat[!is.na(xybasdat$UP24H),]
+xybasdat<-xybasdat[!is.na(xybasdat$age),]
+xybasdat<-xybasdat[!grepl("临床",xybasdat$LN_class),]
+xybasdat<-xybasdat[!grepl("免疫",xybasdat$LN_class),]
+xybasdat$LN_class[xybasdat$LN_class=="II"]<-"IorII"
+xybasdat<-xybasdat[!xybasdat$Cr_first_mon >= 1, ]
+diff<-setdiff(names(xybasdat),names(basdatatree_out))
+same<-intersect(names(xybasdat),names(basdatatree_out))
+dput(diff)
+dput(names(xybasdat))
+colnames(basdatanew)[c(23,46)]<-c("LN_class","Alb")
+basdatanew$center<-"ny"
+nybasdat<-cbind(basdatatree_out[,same],basdatanew[,diff])
+nybasdat<-nybasdat[,c("ID", "age", "gender", "sleduration", "LN_class", "Alb", "UP24H","eGFR_first", "eGFR_first_mon", "eGFR_last", "eGFR_last_mon",
+"Cr_first_mon", "Cr_first", "Cr_last_mon", "Cr_last", "Upro_last_mon",
+"Upro_last", "pro_dec_perc", "mon", "cr_increase", "res_mon",
+"res_wash", "CRmon", "PRmon", "NRmon", "cr10", "cr15", "cr20",
+"cr25", "cr30", "cr40", "cr50","fclass4","center")]
+# table(twocen_bas$LN_class)
+twocen_bas<-rbind(xybasdat,nybasdat)
+summary(twocen_bas)
+######
+vars<-names(twocen_bas);dput(vars)
+str(data)
+vars<-c( "age", "gender", "sleduration", "LN_class", "Alb", "UP24H",
+"eGFR_first", "eGFR_first_mon", "eGFR_last", "eGFR_last_mon",
+"Cr_first_mon", "Cr_first", "Cr_last_mon", "Cr_last", "Upro_last_mon",
+"Upro_last", "pro_dec_perc", "mon", "cr_increase", "res_mon",
+"res_wash", "CRmon", "PRmon", "NRmon", "cr10", "cr15", "cr20",
+"cr25", "cr30", "cr40", "cr50", "fclass4", "center")
+factorvars<-c("gender", "LN_class", "res_wash", "cr10", "cr15", "cr20",
+"cr25", "cr30", "cr40", "cr50", "fclass4", "center")
+
+twocen_bas[factorvars]<-lapply(twocen_bas[factorvars],factor)
+numvars<-setdiff(vars,factorvars)
+twocen_bas[numvars]<-lapply(twocen_bas[numvars],as.numeric)
+#output for spss 2*c chi suqer
+spssdata<-twocen_bas[,factorvars]
+write.csv(spssdata,"spssdata_twocenter.csv")
+spssdata<-twocen_bas[,c(numvars,"fclass4")]
+write.csv(spssdata,"spssdata_num_twocenter.csv")
+library("tableone")#baseline table
+
+twocen_bas$res_mon[twocen_bas$res_wash=="NR"]<-NA  ##res_mon 只包括PR和CR的
+
+
+a<-twocen_bas
+############
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'center', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal =numvars)##exact=c("esrd","die","acl")#nonnormal = c( )
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_twocenter_nonnor.csv")
+excel<-read.csv("./figures/v3_twocenter_nonnor.csv")
+write.xlsx(excel,"./figures/v3_twocenter_nonnor.xlsx")
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'center', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal = c( ))##exact=c("esrd","die","acl")
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_twocenter_nor.csv")
+excel<-read.csv("./figures/v3_twocenter_nor.csv")
+write.xlsx(excel,"./figures/v3_twocenter_nor.xlsx")
+
+# save(twocen_bas,file="twocen_bas.Rdata")
+```
+
+
+```{r_data_pre}
+dput(names(basdatatree_out))
+muldata1<-basdatatree_out[,c("age","gender","sleduration",  "LNduration", "newonsetLN", "AKI", "LNCLASS_si","IorII", "III", "IV", "mix", "V","AI", "debri", "cellcrescent", "sclerosis", "TIshrink", "TIsclerosis","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG", "HTN","priois", "fclass4")] ##去掉激素量
+
+vars<-c("age","gender","sleduration",  "LNduration", "newonsetLN", "AKI", "LNCLASS_si","IorII", "III", "IV", "mix", "V","AI", "debri", "cellcrescent", "sclerosis", "TIshrink", "TIsclerosis","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG", "HTN","priois", "fclass4")
+
+numvars<-c("age","sleduration",  "LNduration", "AI",  "cellcrescent", "sclerosis", "TIshrink","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG","priois")
+
+factorvars<-setdiff(vars,numvars)
+```
+
+
+```{r comparison of different groups_table1}
+str(data)
+a<-twocen_bas[twocen_bas$center="ny",]
+#------------------------------------------------------
+library("tableone")#baseline table
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'fclass4', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal =numvars)##exact=c("esrd","die","acl")#nonnormal = c( )
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_LBvsOTHER.csv")
+excel<-read.csv("./figures/v3_LBvsOTHER.csv")
+write.xlsx(excel,"./figures/v3_LBvsOTHER.xlsx")
+
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'fclass4', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal = c( ))##exact=c("esrd","die","acl")
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_LBvsOTHER_nor.csv")
+excel<-read.csv("./figures/v3_LBvsOTHER_nor.csv")
+write.xlsx(excel,"./figures/v3_LBvsOTHER_nor.xlsx")
+```
+
+
+```{r_separate data to a traing set and a testing set}
+str(muldata1)
+set.seed(1984) #1984 2019 1984四临床因素
+
+# muldata1<-muldata1[,c(23,1:22)]
+# muldata1$fclass4<-ifelse(muldata1$fclass4=="ER_LB","1","0")
+# muldata1$fclass4<-as.factor(muldata1$fclass4)
+
+ind <- sample(2, nrow(muldata1), replace=TRUE, prob=c(0.7, 0.3))
+trainData <- muldata1[ind==1,]
+testData <- muldata1[ind==2,]
+
+trainData<-trainData[,c("fclass4", "age", "gender", "sleduration", "LNduration", "newonsetLN",
+"AKI", "LNCLASS_si","AI", "debri", "cellcrescent", "sclerosis",
+"TIshrink", "TIsclerosis", "UP24H", "ALB", "RBC", "CR", "BNP",
+"CRP", "IGG", "HTN")]
+# save(trainData,file="traindata.Rdata")
+# save(testData,file="testdata.Rdata")
+```
+
+
+```{r CUTOFF_training set}
+traincut<-trainData
+traincut$fclass4<-as.factor(traincut$fclass4)
+
+newcutoffcol=function(f){
+library("OptimalCutpoints")
+datacut<-traincut[,c("fclass4",f)]
+optimal.Youden <- optimal.cutpoints(X =f,status ="fclass4",tag.healthy =1,
+                                    methods ="Youden",data = datacut,
+                                    ci.fit = TRUE, conf.level = 0.95)
+cutoff<-optimal.Youden[["Youden"]][["Global"]][["optimal.cutoff"]]$cutoff
+cat(cutoff)
+plot(optimal.Youden, which = 1,col = "red", ylim = c(0,1)) #plot1
+plot(optimal.Youden, which = 3,col = "red", ylim = c(0,1)) #plot2
+colname<-paste(f,cutoff, sep = "_")
+newcol<-as.data.frame(ifelse(traincut[,f] >= cutoff , "1", "0"))
+colnames(newcol)<-colname
+traincut<-cbind(traincut,newcol)
+                        }
+
+for(i in c("sleduration",  "LNduration", "AI",  "cellcrescent", "sclerosis", "TIshrink","UP24H",  "RBC", "CR", "BNP", "CRP")){traincut<-newcutoffcol(i)}
+#generate new col according to cutoff value
+
+dput(names(traincut))
+
+for(i in c("sleduration_0.92", "LNduration_0.17", "AI_7", 
+"cellcrescent_0.14", "sclerosis_0.32", "TIshrink_10", "UP24H_2.4", 
+"RBC_27", "CR_101", "BNP_26", "CRP_0.43")) {traincut[,i] <- as.factor(traincut[,i])}
+
+
+newcutoffcol=function(f){
+library("OptimalCutpoints")
+datacut<-traincut[,c("fclass4",f)]
+optimal.Youden <- optimal.cutpoints(X =f,status ="fclass4",tag.healthy =0,
+                                    methods ="Youden",data = datacut,
+                                    ci.fit = TRUE, conf.level = 0.95)
+cutoff<-optimal.Youden[["Youden"]][["Global"]][["optimal.cutoff"]]$cutoff
+cat(cutoff)
+plot(optimal.Youden, which = 1,col = "red", ylim = c(0,1)) #plot1
+plot(optimal.Youden, which = 3,col = "red", ylim = c(0,1)) #plot2
+colname<-paste(f,cutoff, sep = "_")
+newcol<-as.data.frame(ifelse(traincut[,f] >= cutoff , "1", "0"))
+colnames(newcol)<-colname
+traincut<-cbind(traincut,newcol)
+                        }
+
+for(i in c("age","ALB", "IGG")){traincut<-newcutoffcol(i)}
+#generate new col according to cutoff value
+
+dput(names(traincut))
+
+for(i in c("age_48",  "ALB_25.7","IGG_13.2")) {traincut[,i] <- as.factor(traincut[,i])}
+
+# save(traincut,file="traincut_130.Rdata")
+
+fit.full <- glm(fclass4 ~ UP24H_2.27,
+                data=traincut,family=binomial(link="logit"))
+summary(fit.full)#0.0000000474 ***
+```
+
+```{r CUTOFF_testing set}
+dput(names(traincut))
+testcut<-testData
+testcutoffcol=function(f,cutoff){
+colname<-paste(f,cutoff, sep = "_")
+newcol<-as.data.frame(ifelse(testcut[,f] >= cutoff , "1", "0"))
+colnames(newcol)<-colname
+testcut<-cbind(testcut,newcol)
+                                 }
+
+("sleduration_0.92", "LNduration_0.17", "AI_7", 
+"cellcrescent_0.14", "sclerosis_0.32", "TIshrink_10", "UP24H_2.4", 
+"RBC_27", "CR_101", "BNP_26", "CRP_0.43")
+for(i in c("age_48",  "ALB_25.7","IGG_13.2")) 
+
+testcut<-testcutoffcol("age",48)
+testcut<-testcutoffcol("sleduration",0.92)
+testcut<-testcutoffcol("LNduration",0.17)
+testcut<-testcutoffcol("AI",7)
+testcut<-testcutoffcol("cellcrescent",0.14)
+testcut<-testcutoffcol("sclerosis",0.32)
+testcut<-testcutoffcol("TIshrink",10)
+testcut<-testcutoffcol("UP24H",2.4)
+testcut<-testcutoffcol("ALB",25.7)
+testcut<-testcutoffcol("RBC",27)
+testcut<-testcutoffcol("CR",101)
+testcut<-testcutoffcol("BNP",26)
+testcut<-testcutoffcol("CRP",0.43)
+testcut<-testcutoffcol("IGG",13.2)
+
+for(i in c( "sleduration_0.92", "LNduration_0.17", "AI_7", 
+"cellcrescent_0.14", "sclerosis_0.32", "TIshrink_10", "UP24H_2.4", 
+"RBC_27", "CR_101", "BNP_26", "CRP_0.43", "age_48", "ALB_25.7", 
+"IGG_13.2")) {testcut[,i] <- as.factor(testcut[,i])}
+vis_miss(testcut)
+# save(testcut,file="testcut_64.Rdata")
+```
+
+```{r datapre for RP VS OTHERS}
+load("testcut_45.Rdata")
+load("traincut_149.Rdata")
+```
+
+#ER_LB_vs_OTHERS
+
+```{r_merge group_decision tree_the result is not satisfactory}
+library(party)
+library(mlbench)
+
+control<-ctree_control(mincriterion= 0.90)
+m1_ctree<-ctree(trainData$fclass4 ~., data = trainData,controls = control)
+table(predict(m1_ctree), trainData$fclass4)
+plot(m1_ctree)
+table(predict(m1_ctree), trainData$fclass4)
+
+#https://zhuanlan.zhihu.com/p/28416543
+```
+
+
+```{r data_pre regression planA_merge41,43_42,44}
+library(glmnet)
+
+dput(names(trainData))
+trainData<-traincut[,c("fclass4","gender", "newonsetLN", 
+"AKI", "LNCLASS_si",  "debri",  
+"TIsclerosis",   "HTN", "priois",  "age","sleduration",  "LNduration", "AI",  "cellcrescent", "sclerosis", "TIshrink","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG")]
+
+##stepwise regression-backward
+fit.full.step<-glm(fclass4 ~.,
+                   data=trainData,family = binomial(link="logit"))
+summary(fit.full.step)
+
+fit.full.step1<-step(fit.full.step,direction = "backward")
+summary(fit.full.step1)
+
+###all subset regression
+# install.packages("leaps")
+library(leaps)
+leaps<-regsubsets(fclass4 ~. , data=trainData, nbest=1)
+plot(leaps, scale="adjr2")
+leaps[["rss"]]
+
+###LASSO regression
+lassodata<-trainData
+# lassodata<-traincut1
+for(i in names(lassodata)[c(1:22)]) {lassodata[,i] <- as.numeric(lassodata[,i])}    #numeric
+library("glmnet")
+set.seed(123) 
+
+x <- as.matrix(lassodata[,2:22])
+y <- lassodata[, c("fclass4")]
+fitCV <- cv.glmnet(x, y, family = "binomial",type.measure = "class",nfolds = 20)#standardize=TRUE
+print(fitCV);plot(fitCV)
+fit <- glmnet(x, y, family = "binomial", alpha = 1) # make sure alpha = 1
+plot(fit, xvar="lambda",label = TRUE);print(fit)
+
+lambda= 0.076440  #min+1se
+abline(v = log(lambda), lty = 3,lwd = 2,col = "black")# get the coef
+#model
+coef.min = coef(fitCV, s = lambda  ) 
+coef.min
+
+lambda=0.072950  #min
+abline(v = log(lambda), lty = 3,lwd = 2,col = "black")# get the coef
+#model
+coef.min = coef(fitCV, s = lambda) 
+coef.min
+```
+
+
+
+```{r SVM}
+#(1)支持向量机(SVM):
+install.packages("kernlab")
+library(kernlab)
+irismodel <- ksvm(Species ~ ., data = iris,type = "C-bsvc", kernel = "rbfdot",kpar = list(sigma = 0.1), C = 10,prob.model = TRUE) 
+irismodel
+predict(irismodel, iris[c(3, 10, 56, 68, 107, 120), -5], type = "probabilities")
+
+#Ksvm支持自定义核函数。如
+k <- function(x, y) { (sum(x * y) + 1) * exp(0.001 * sum((x - y)^2)) }
+class(k) <- "kernel"
+data("promotergene")
+gene <- ksvm(Class ~ ., data = promotergene, kernel = k, C = 10, cross = 5)#训练
+gene
+
+#对于二分类问题，可以对结果用plot()进行可视化。例子如下
+x <- rbind(matrix(rnorm(120),, 2), matrix(rnorm(120, mean = 3),, 2))
+y <- matrix(c(rep(1, 60), rep(-1, 60)))
+svp <- ksvm(x, y, type = "C-svc", kernel = "rbfdot", kpar = list(sigma = 2))
+plot(svp)
+
+### 1VS234
+train<-trainData
+test<-testData
+svm<-svm(train[,c(2:7,9:22)],train[,1],type="C-classification",cost=10,kernel="radial",probability=TRUE,scale=FALSE)
+test<-test[,colnames(train)]
+pred<-predict(svm,test[,c(2:7,9:22)],decision.values=TRUE)
+table(pred,test[,1])
+(47)/(47+17) #0.73
+
+library(e1071)
+model <- svm(Species ~ ., data = iris,method = "C-classification", kernel = "radial",cost = 10, gamma = 0.1)
+summary(model)
+plot(model, iris, Petal.Width ~Petal.Length, slice = list(Sepal.Width = 3,Sepal.Length = 4))
+pre=predict(model, iris,type='class') 
+table(pre,iris$Species) 
+
+library("klaR")
+data("B3")
+Bmod <- svmlight(PHASEN ~ ., data = B3,svm.options = "-c 10 -t 2 -g 0.1 -v 0")
+predict(Bmod, B3[c(4, 9, 30, 60, 80, 120),-1])
+
+# https://bbs.pinggu.org/thread-3229770-1-1.html
+
+```
+
+
+```{r trian model1  logi_regression LB VS others}
+# as_train<-triancut
+as_train<-trainData
+trainData$fclass4<-as.factor(trainData$fclass4)
+fit.full.step<-glm(fclass4 ~ age+ALB+sleduration,data=trainData,family = binomial(link="logit"))#model1 0.846 0.854
+
+##summary models
+library("stargazer")
+#model
+stargazer(fit.full.step,title="Logistic Regression Model",type="text")
+cbind(coef= coef(fit.full.step),confint(fit.full.step))
+exp(cbind(OR= coef(fit.full.step),confint(fit.full.step)))
+summary(fit.full.step)
+
+#ROC curves
+data1<-as_train
+prob <- fit.full.step$fitted.values;data1$prob<-prob
+pgroup <- ifelse(prob > 0.5, "1", "0");data1$pgroup <- pgroup
+t <- table(data1$fclass4,data1$pgroup)
+rownames(t) <- c("Obs. neg","Obs. pos")
+colnames(t) <- c("Pred. neg","Pred. pos")
+prop.table(t)*100
+efficiency <- sum(diag(t))/sum(t)  #efficiency=0.7769231
+library("pROC")
+
+roc1a <- roc(fclass4~prob, data = data1,smooth=F)
+plot(roc1a, print.auc=TRUE, print.thres=TRUE,main = "ROC CURVE trainbio",
+     col="#0072B5FF",print.thres.col="#BC3C29FF",identity.col="#0072B5FF",identity.lty=1,identity.lwd=1)
+ci.auc(roc1a)
+
+#predict the response-probability of the first observation
+obs <- data1[1,]
+predict(newdata=obs,fit.full.step,"response") #0.4493
+
+#nomogram--take the first observation as an example
+library("regplot")
+regplot(fit.full.step,observation = obs,droplines=T,prfail = T,clickable = TRUE)
+```
+
+```{r test model1}
+# as_test<-testcut
+as_test<-testData
+#ROC
+predictpro<- predict.glm(fit.full.step,type='response',newdata=as_test)
+predict =ifelse(predictpro>0.5,1,0)
+as_test$prob = predictpro
+as_test$predict = predict
+
+roc1e <- roc(fclass4~prob, data = as_test,smooth=F)
+plot(roc1e, print.auc=TRUE, print.thres=TRUE,main = "ROC CURVE",col="#0072B5FF",print.thres.col="#BC3C29FF",identity.col="#0072B5FF",identity.lty=1,identity.lwd=1)
+ci.auc(roc1e)
+```
+
+```{r trian model2  logi_regression LB VS others}
+
+fit.full.step<-glm(fclass4 ~ age+UP24H+sleduration+ALB,data=trainData,family = binomial(link="logit"))#model2 0.869 0.876  ##final model
+
+##############
+library("stargazer")
+#model
+stargazer(fit.full.step,title="Logistic Regression Model",type="text")
+cbind(coef= coef(fit.full.step),confint(fit.full.step))
+exp(cbind(OR= coef(fit.full.step),confint(fit.full.step)))
+summary(fit.full.step)
+
+#ROC
+data1<-as_train
+prob <- fit.full.step$fitted.values;data1$prob<-prob
+pgroup <- ifelse(prob > 0.5, "1", "0");data1$pgroup <- pgroup
+t <- table(data1$fclass4,data1$pgroup)
+rownames(t) <- c("Obs. neg","Obs. pos")
+colnames(t) <- c("Pred. neg","Pred. pos")
+prop.table(t)*100
+efficiency <- sum(diag(t))/sum(t)  #efficiency=0.7769231
+library("pROC")
+
+roc2a <- roc(fclass4~prob, data = data1,smooth=F)
+plot(roc2a, print.auc=TRUE, print.thres=TRUE,main = "ROC CURVE trainbio",
+     col="#0072B5FF",print.thres.col="#BC3C29FF",identity.col="#0072B5FF",identity.lty=1,identity.lwd=1)
+ci.auc(roc2a)
+
+#predict the response-probability of the first observation
+obs <- data1[1,]
+predict(newdata=obs,fit.full.step,"response") #0.7217886
+
+#nomogram--take the first observation as an example
+library("regplot")
+
+regplot(fit.full.step,observation = obs,droplines=T,prfail = T,clickable = TRUE) #4*5
+```
+
+
+```{r test model2}
+# as_test<-testcut
+as_test<-testData
+#ROC
+predictpro<- predict.glm(fit.full.step,type='response',newdata=as_test)
+predict =ifelse(predictpro>0.5,1,0)
+as_test$prob = predictpro
+as_test$predict = predict
+
+roc2e <- roc(fclass4~prob, data = as_test,smooth=F)
+plot(roc2e, print.auc=TRUE, print.thres=TRUE,main = "ROC CURVE",col="#0072B5FF",print.thres.col="#BC3C29FF",identity.col="#0072B5FF",identity.lty=1,identity.lwd=1)
+ci.auc(roc2e)
+```
+
+```{r model2 external validation }
+load("twocen_bas.Rdata")
+
+xytestData<-twocen_bas[twocen_bas$center=="xy",]
+names(xytestData)[6]<-"ALB"
+as_test<-xytestData ##119
+#ROC
+predictpro<- predict.glm(fit.full.step,type='response',newdata=as_test)
+predict =ifelse(predictpro>0.5,1,0)
+as_test$fclass4 = predict
+table(as_test$fclass4)
+names(as_test)[6]<-"Alb"
+nydat<-twocen_bas[twocen_bas$center=="ny",]
+as_test<-as_test[,names(nydat)]
+twocen_bas<-rbind(nydat,as_test)
+twocen_bas$res_mon[twocen_bas$res_wash=="NR"]<-NA  ##res_mon 只包括PR和CR的
+
+dput(names(twocen_bas))
+
+vars<-c("age", "gender", "sleduration", "LN_class", "Alb", "UP24H", 
+"eGFR_first", "eGFR_first_mon", "eGFR_last", "eGFR_last_mon", 
+"Cr_first_mon", "Cr_first", "Cr_last_mon", "Cr_last", "Upro_last_mon", 
+"Upro_last", "pro_dec_perc", "mon", "cr_increase", "res_mon", 
+"res_wash", "CRmon", "PRmon", "NRmon", "cr10", "cr15", "cr20", 
+"cr25", "cr30", "cr40", "cr50", "fclass4", "center")
+
+factorvars<-c("gender", "LN_class","res_wash", "cr10", "cr15", "cr20", 
+"cr25", "cr30", "cr40", "cr50", "fclass4", "center")
+
+numvars<-setdiff(vars,factorvars)
+
+twocen_bas[factorvars]<-lapply(twocen_bas[factorvars],factor)
+twocen_bas[numvars]<-lapply(twocen_bas[numvars],as.numeric)
+
+
+library("tableone")#baseline table
+a<-twocen_bas[twocen_bas$fclass4=="1",]
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'center', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal =numvars)##exact=c("esrd","die","acl")#nonnormal = c( )
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_RR_twocenter_nonnor.csv")
+excel<-read.csv("./figures/v3_RR_twocenter_nonnor.csv")
+write.xlsx(excel,"./figures/v3_RR_twocenter_nonnor.xlsx")
+
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'center', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal = c( ))##exact=c("esrd","die","acl")
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_RR_twocenter_nor.csv")
+excel<-read.csv("./figures/v3_RR_twocenter_nor.csv")
+write.xlsx(excel,"./figures/v3_RR_twocenter_nor.xlsx")
+library("tableone")#baseline table
+
+
+a<-twocen_bas[twocen_bas$fclass4=="0",]
+############
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'center', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal =numvars)##exact=c("esrd","die","acl")#nonnormal = c( )
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_nonRR_twocenter_nonnor.csv")
+excel<-read.csv("./figures/v3_nonRR_twocenter_nonnor.csv")
+write.xlsx(excel,"./figures/v3_nonRR_twocenter_nonnor.xlsx")
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'center', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal = c( ))##exact=c("esrd","die","acl")
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_nonRR_twocenter_nor.csv")
+excel<-read.csv("./figures/v3_nonRR_twocenter_nor.csv")
+write.xlsx(excel,"./figures/v3_nonRR_twocenter_nor.xlsx")
+
+
+
+a<-twocen_bas[twocen_bas$center=="xy",]
+############
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'fclass4', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal =numvars)##exact=c("esrd","die","acl")#nonnormal = c( )
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_xy_RR_VS_nonRR.csv")
+excel<-read.csv("./figures/v3_xy_RR_VS_nonRR.csv")
+write.xlsx(excel,"./figures/v3_xy_RR_VS_nonRR.xlsx")
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'fclass4', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal = c( ))##exact=c("esrd","die","acl")
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_xy_RR_VS_nonRR_nor.csv")
+excel<-read.csv("./figures/v3_xy_RR_VS_nonRR_nor.csv")
+write.xlsx(excel,"./figures/v3_xy_RR_VS_nonRR_nor.xlsx")
+```
+
+
+```{r  validation cohort ‘spaghetti plots’  }
+# xydat<-twocen_bas[twocen_bas$center=="xy",]
+# write.xlsx(xydat,file = "xydat.xlsx")
+# xydat<-xydat[,c("ID","fclass4")]
+xydat<-twocen_bas[twocen_bas$center=="xy",]
+write.xlsx(xydat,file = "./figures/xydat_new.xlsx")
+xydat<-xydat[,c("ID","fclass4")]
+
+## spaghetti
+mydata2<-merge(xymydata,xydat,by="ID",all.x = T)
+library(ggplot2)
+names(mydata2)
+mydata2$fclass4<-as.factor(mydata2$fclass4)
+mydata2<-na.omit(mydata2)
+  
+mydata2$class2<-mydata2$fclass4
+
+xyrrid<-mydata2[mydata2$fclass4=="1",]$ID
+xyrrid<-unique(xyrrid)
+xyrr<-xypro_cr_data[xypro_cr_data$ID %in% xyrrid,]
+write.xlsx(xyrr,"./figures/xyrr.xlsx")
+
+
+mydata2$class2<-ifelse(mydata2$class2=="1","RR","non-RR")
+mydata2$class2<-as.factor(mydata2$class2)
+mydata2$class2 <- relevel(mydata2$class2, ref = "RR") 
+
+ggplot(mydata2, aes(x = mon, y = Upro)) + geom_line(aes(color = class2,group = ID),alpha=0.7) + xlab("months") + ylab("24h-Urine protein(g/d)")+ labs(color = "Class Assignment")+theme_classic()+ geom_hline(aes(yintercept=0.3), colour="#990000", linetype="dashed")
+
+ggplot2::ggsave(filename = "./figures/validation.pdf",width = 6,height = 4)
+ggplot2::ggsave(filename = "./figures/validation.png",width = 6,height = 4)
+
+```
+
+
+```{r trian model3 logi_regression LB VS others}
+
+fit.full.step<-glm(fclass4 ~ age+UP24H+sleduration+ALB+LNCLASS_si,data=trainData,family = binomial(link="logit"))#model3 0.878 0.855
+
+##############
+library("stargazer")
+#model
+stargazer(fit.full.step,title="Logistic Regression Model",type="text")
+cbind(coef= coef(fit.full.step),confint(fit.full.step))
+exp(cbind(OR= coef(fit.full.step),confint(fit.full.step)))
+summary(fit.full.step)
+
+#ROC
+data1<-as_train
+prob <- fit.full.step$fitted.values;data1$prob<-prob
+pgroup <- ifelse(prob > 0.5, "1", "0");data1$pgroup <- pgroup
+t <- table(data1$fclass4,data1$pgroup)
+rownames(t) <- c("Obs. neg","Obs. pos")
+colnames(t) <- c("Pred. neg","Pred. pos")
+prop.table(t)*100
+efficiency <- sum(diag(t))/sum(t)  #efficiency=0.7769231
+library("pROC")
+
+roc3a <- roc(fclass4~prob, data = data1,smooth=F)
+plot(roc3a, print.auc=TRUE, print.thres=TRUE,main = "ROC CURVE trainbio",
+     col="#0072B5FF",print.thres.col="#BC3C29FF",identity.col="#0072B5FF",identity.lty=1,identity.lwd=1)
+ci.auc(roc3a)
+
+#predict the response-probability of the first observation
+obs <- data1[1,]
+predict(newdata=obs,fit.full.step,"response") #0.4493
+
+#nomogram--take the first observation as an example
+library("regplot")
+
+regplot(fit.full.step,observation = obs,droplines=T,prfail = T,clickable = TRUE)
+```
+
+
+```{r test model3}
+# as_test<-testcut
+as_test<-testData
+#ROC
+predictpro<- predict.glm(fit.full.step,type='response',newdata=as_test)
+predict =ifelse(predictpro>0.5,1,0)
+as_test$prob = predictpro
+as_test$predict = predict
+
+roc3e <- roc(fclass4~prob, data = as_test,smooth=F)
+plot(roc3e, print.auc=TRUE, print.thres=TRUE,main = "ROC CURVE",col="#0072B5FF",print.thres.col="#BC3C29FF",identity.col="#0072B5FF",identity.lty=1,identity.lwd=1)
+ci.auc(roc3e)
+```
+
+```{r delong test}
+#------------------
+roc.test(roc1a,roc1e,method = 'delong')
+#1vs2
+roc.test(roc1a,roc2a,method = 'delong') #p-value = 0.04771
+roc.test(roc1e,roc2e,method = 'delong') #p-value = 0.0007127
+#2vs3
+roc.test(roc2a,roc3a,method = 'delong') #p-value = 0.3076
+roc.test(roc2e,roc3e,method = 'delong') #p-value = 0.07791
+
+#2vs3
+roc.test(roc2a,roc2e,method = 'delong') #p-value = 0.907
+```
+
+
+###exclude ER_LB and then compare  ER_LB with LR+NR=IR
+```{r merge_ER_LBvsOTHERS_variabels with p_data_pre}
+load("./figures/refine_beforenormal.Rdata")
+load("bas.Rdata")
+write.xlsx(basdatanew,file="1基线basdatanew.xlsx")
+mydata$Upro<-beforenor
+class4<-bb3$pprob
+table(basdatanew$ID==class4$ID)
+data<-cbind(basdatanew,fclass4=class4[,c(2)])
+load("basdatatree_out.Rdata")
+
+df<-basdatatree_out[,c("age", "sleduration","AI", "cellcrescent","sclerosis", "TIshrink","UP24H","ALB","RBC","CR",  "BNP", "DD", "CRP","IGG","SLEDAI")]
+df_cor=cor(df)
+kappa(df_cor, exact=T)  ###1000 无多重共线性
+
+library(foreign)
+library(nnet)
+library(ggplot2)
+library(reshape2)
+
+basdatatree_out<-basdatatree_out[!basdatatree_out$fclass4=="0ER_LB",] #137
+basdatatree_out$fclass4 <-str_replace_all(basdatatree_out$fclass4 ,"2ER_HB","ER_HB")
+basdatatree_out$fclass4 <-str_replace_all(basdatatree_out$fclass4 ,"5LR","IR")
+basdatatree_out$fclass4 <-str_replace_all(basdatatree_out$fclass4,"6NR","IR")
+basdatatree_out$fclass4<-ifelse(basdatatree_out$fclass4=="IR",0,1)
+
+basdatatree_out$fclass4<-as.factor(basdatatree_out$fclass4)
+
+basdatatree_out$fclass4 <- relevel(basdatatree_out$fclass4, ref = "0") 
+basdatatree_out$LNCLASS_si <- relevel(basdatatree_out$LNCLASS_si, ref = "mix")
+```
+
+
+```{r_data_pre}
+dput(names(basdatatree_out))
+muldata1<-basdatatree_out[,c("age","gender","sleduration",  "LNduration", "newonsetLN", "AKI", "LNCLASS_si","IorII", "III", "IV", "mix", "V","AI", "debri", "cellcrescent", "sclerosis", "TIshrink", "TIsclerosis","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG", "HTN","priois", "fclass4")] ##去掉激素量
+
+vars<-c("age","gender","sleduration",  "LNduration", "newonsetLN", "AKI", "LNCLASS_si","IorII", "III", "IV", "mix", "V","AI", "debri", "cellcrescent", "sclerosis", "TIshrink", "TIsclerosis","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG", "HTN","priois", "fclass4")
+
+numvars<-c("age","sleduration",  "LNduration", "AI",  "cellcrescent", "sclerosis", "TIshrink","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG","priois")
+
+factorvars<-setdiff(vars,numvars)
+```
+
+
+```{r comparison of different groups_table1}
+str(data)
+a<-basdatatree_out
+#------------------------------------------------------
+library("tableone")#baseline table
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'fclass4', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal =numvars)##exact=c("esrd","die","acl")#nonnormal = c( )
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_2vs34.csv")
+excel<-read.csv("./figures/v3_2vs34.csv")
+write.xlsx(excel,"./figures/v3_2vs34.xlsx")
+
+#----------------------lanclass4-----------------------
+attach(a)
+table <- CreateTableOne(vars = vars, strata = 'fclass4', factorVars = factorvars,data = a)
+table <- print(table, missing = TRUE,smd = TRUE,showAllLevels = TRUE,nonnormal = c( ))##exact=c("esrd","die","acl")
+table1 <- print(table, smd = TRUE)
+detach(a)
+write.csv(table1, file = "./figures/v3_2vs34RR_nor.csv")
+excel<-read.csv("./figures/v3_2vs34R_nor.csv")
+write.xlsx(excel,"./figures/v3_2vs34R_nor.xlsx")
+```
+
+
+```{r_separate data to a traing set and a testing set}
+str(muldata1)
+set.seed(1988) #1984 2019 1984四临床因素
+
+# muldata1<-muldata1[,c(23,1:22)]
+# muldata1$fclass4<-ifelse(muldata1$fclass4=="ER_LB","1","0")
+# muldata1$fclass4<-as.factor(muldata1$fclass4)
+
+ind <- sample(2, nrow(muldata1), replace=TRUE, prob=c(0.7, 0.3))
+trainData <- muldata1[ind==1,]
+testData <- muldata1[ind==2,]
+
+trainData<-trainData[,c("fclass4", "age", "gender", "sleduration", "LNduration", "newonsetLN",
+"AKI", "LNCLASS_si","AI", "debri", "cellcrescent", "sclerosis",
+"TIshrink", "TIsclerosis", "UP24H", "ALB", "RBC", "CR", "BNP",
+"CRP", "IGG", "HTN")]
+# save(trainData,file="traindata.Rdata")
+# save(testData,file="testdata.Rdata")
+```
+
+
+#ER_LB_vs_OTHERS
+
+```{r_merge group_decision tree_the result is not satisfactory}
+library(party)
+library(mlbench)
+
+control<-ctree_control(mincriterion= 0.90)
+m1_ctree<-ctree(trainData$fclass4 ~., data = trainData,controls = control)
+table(predict(m1_ctree), trainData$fclass4)
+plot(m1_ctree)
+table(predict(m1_ctree), trainData$fclass4)
+
+#https://zhuanlan.zhihu.com/p/28416543
+```
+
+
+```{r regression planA_merge41,43_42,44}
+library(glmnet)
+
+dput(names(trainData))
+trainData<-traincut[,c("fclass4","gender", "newonsetLN", "AKI", "LNCLASS_si",  "debri",  
+"TIsclerosis",   "HTN", "priois",  "age","sleduration",  "LNduration", "AI",  "cellcrescent", "sclerosis", "TIshrink","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG")]
+
+##stepwise regression-backward
+fit.full.step<-glm(fclass4 ~.,
+                   data=trainData,family = binomial(link="logit"))
+summary(fit.full.step)
+
+fit.full.step1<-step(fit.full.step,direction = "backward")
+summary(fit.full.step1)
+
+###all subset regression
+# install.packages("leaps")
+library(leaps)
+leaps<-regsubsets(fclass4 ~. , data=trainData, nbest=1)
+plot(leaps, scale="adjr2")
+leaps[["rss"]]
+
+###LASSO regression
+lassodata<-trainData
+# lassodata<-traincut1
+for(i in names(lassodata)[c(1:22)]) {lassodata[,i] <- as.numeric(lassodata[,i])}    #numeric
+library("glmnet")
+set.seed(123) 
+
+x <- as.matrix(lassodata[,2:22])
+y <- lassodata[, c("fclass4")]
+fitCV <- cv.glmnet(x, y, family = "binomial",type.measure = "class",nfolds = 20)#standardize=TRUE
+print(fitCV);plot(fitCV)
+fit <- glmnet(x, y, family = "binomial", alpha = 1) # make sure alpha = 1
+plot(fit, xvar="lambda",label = TRUE);print(fit)
+
+lambda= 0.096800  #min+1se
+abline(v = log(lambda), lty = 3,lwd = 2,col = "black")# get the coef
+#model
+coef.min = coef(fitCV, s = lambda  ) 
+coef.min
+
+lambda=0.072950  #min
+abline(v = log(lambda), lty = 3,lwd = 2,col = "black")# get the coef
+#model
+coef.min = coef(fitCV, s = lambda) 
+coef.min
+```
+
+
+```{r trian model1  logi_regression LB VS others}
+# as_train<-triancut
+as_train<-trainData
+trainData$fclass4<-as.factor(trainData$fclass4)
+fit.full.step<-glm(fclass4 ~gender+newonsetLN+sclerosis,data=trainData,family = binomial(link="logit"))#model1 0.755 0.665
+
+##summary models
+library("stargazer")
+#model
+stargazer(fit.full.step,title="Logistic Regression Model",type="text")
+cbind(coef= coef(fit.full.step),confint(fit.full.step))
+exp(cbind(OR= coef(fit.full.step),confint(fit.full.step)))
+summary(fit.full.step)
+
+#ROC curves
+data1<-as_train
+prob <- fit.full.step$fitted.values;data1$prob<-prob
+pgroup <- ifelse(prob > 0.5, "1", "0");data1$pgroup <- pgroup
+t <- table(data1$fclass4,data1$pgroup)
+rownames(t) <- c("Obs. neg","Obs. pos")
+colnames(t) <- c("Pred. neg","Pred. pos")
+prop.table(t)*100
+efficiency <- sum(diag(t))/sum(t)  #efficiency=0.7769231
+library("pROC")
+
+roc1a <- roc(fclass4~prob, data = data1,smooth=F)
+plot(roc1a, print.auc=TRUE, print.thres=TRUE,main = "ROC CURVE trainbio",
+     col="#0072B5FF",print.thres.col="#BC3C29FF",identity.col="#0072B5FF",identity.lty=1,identity.lwd=1)
+ci.auc(roc1a)
+
+#predict the response-probability of the first observation
+obs <- data1[1,]
+predict(newdata=obs,fit.full.step,"response") #0.4493
+
+#nomogram--take the first observation as an example
+library("regplot")
+regplot(fit.full.step,observation = obs,droplines=T,prfail = T,clickable = TRUE)
+```
+
+```{r test model1}
+# as_test<-testcut
+as_test<-testData
+#ROC
+predictpro<- predict.glm(fit.full.step,type='response',newdata=as_test)
+predict =ifelse(predictpro>0.5,1,0)
+as_test$prob = predictpro
+as_test$predict = predict
+
+roc1e <- roc(fclass4~prob, data = as_test,smooth=F)
+plot(roc1e, print.auc=TRUE, print.thres=TRUE,main = "ROC CURVE",col="#0072B5FF",print.thres.col="#BC3C29FF",identity.col="#0072B5FF",identity.lty=1,identity.lwd=1)
+ci.auc(roc1e)
+```
+
+```{r trian model2  logi_regression LB VS others}
+fit.full.step<-glm(fclass4 ~gender+newonsetLN+sclerosis+RBC,data=trainData,family = binomial(link="logit"))#model2 0.783 0.642  ##final model
+
+
+##############
+library("stargazer")
+#model
+stargazer(fit.full.step,title="Logistic Regression Model",type="text")
+cbind(coef= coef(fit.full.step),confint(fit.full.step))
+exp(cbind(OR= coef(fit.full.step),confint(fit.full.step)))
+summary(fit.full.step)
+
+#ROC
+data1<-as_train
+prob <- fit.full.step$fitted.values;data1$prob<-prob
+pgroup <- ifelse(prob > 0.5, "1", "0");data1$pgroup <- pgroup
+t <- table(data1$fclass4,data1$pgroup)
+rownames(t) <- c("Obs. neg","Obs. pos")
+colnames(t) <- c("Pred. neg","Pred. pos")
+prop.table(t)*100
+efficiency <- sum(diag(t))/sum(t)  #efficiency=0.7769231
+library("pROC")
+
+roc2a <- roc(fclass4~prob, data = data1,smooth=F)
+plot(roc2a, print.auc=TRUE, print.thres=TRUE,main = "ROC CURVE trainbio",
+     col="#0072B5FF",print.thres.col="#BC3C29FF",identity.col="#0072B5FF",identity.lty=1,identity.lwd=1)
+ci.auc(roc2a)
+
+#predict the response-probability of the first observation
+obs <- data1[1,]
+predict(newdata=obs,fit.full.step,"response") #0.4493
+
+#nomogram--take the first observation as an example
+library("regplot")
+
+regplot(fit.full.step,observation = obs,droplines=T,prfail = T,clickable = TRUE)
+```
+
+
+```{r test model2}
+
+# as_test<-testcut
+as_test<-testData
+#ROC
+predictpro<- predict.glm(fit.full.step,type='response',newdata=as_test)
+predict =ifelse(predictpro>0.5,1,0)
+as_test$prob = predictpro
+as_test$predict = predict
+
+roc2e <- roc(fclass4~prob, data = as_test,smooth=F)
+plot(roc2e, print.auc=TRUE, print.thres=TRUE,main = "ROC CURVE",col="#0072B5FF",print.thres.col="#BC3C29FF",identity.col="#0072B5FF",identity.lty=1,identity.lwd=1)
+ci.auc(roc2e)
+```
+
+
+```{r trian model3 logi_regression LB VS others}
+
+fit.full.step<-glm(fclass4 ~ age+gender+newonsetLN+sclerosis+RBC,data=trainData,family = binomial(link="logit"))#model3 0.778 0.646
+
+##############
+library("stargazer")
+#model
+stargazer(fit.full.step,title="Logistic Regression Model",type="text")
+cbind(coef= coef(fit.full.step),confint(fit.full.step))
+exp(cbind(OR= coef(fit.full.step),confint(fit.full.step)))
+summary(fit.full.step)
+
+#ROC
+data1<-as_train
+prob <- fit.full.step$fitted.values;data1$prob<-prob
+pgroup <- ifelse(prob > 0.5, "1", "0");data1$pgroup <- pgroup
+t <- table(data1$fclass4,data1$pgroup)
+rownames(t) <- c("Obs. neg","Obs. pos")
+colnames(t) <- c("Pred. neg","Pred. pos")
+prop.table(t)*100
+efficiency <- sum(diag(t))/sum(t)  #efficiency=0.7769231
+library("pROC")
+
+roc3a <- roc(fclass4~prob, data = data1,smooth=F)
+plot(roc3a, print.auc=TRUE, print.thres=TRUE,main = "ROC CURVE trainbio",
+     col="#0072B5FF",print.thres.col="#BC3C29FF",identity.col="#0072B5FF",identity.lty=1,identity.lwd=1)
+ci.auc(roc3a)
+
+#predict the response-probability of the first observation
+obs <- data1[1,]
+predict(newdata=obs,fit.full.step,"response") #0.4493
+
+#nomogram--take the first observation as an example
+library("regplot")
+
+regplot(fit.full.step,observation = obs,droplines=T,prfail = T,clickable = TRUE)
+```
+
+
+```{r test model3}
+# as_test<-testcut
+as_test<-testData
+#ROC
+predictpro<- predict.glm(fit.full.step,type='response',newdata=as_test)
+predict =ifelse(predictpro>0.5,1,0)
+as_test$prob = predictpro
+as_test$predict = predict
+
+roc3e <- roc(fclass4~prob, data = as_test,smooth=F)
+plot(roc3e, print.auc=TRUE, print.thres=TRUE,main = "ROC CURVE",col="#0072B5FF",print.thres.col="#BC3C29FF",identity.col="#0072B5FF",identity.lty=1,identity.lwd=1)
+ci.auc(roc3e)
+```
+
+```{r delong test}
+#train：bio vs nobio------------------
+roc.test(roc1a,roc1e,method = 'delong') #
+#1vs2
+roc.test(roc1a,roc2a,method = 'delong') #p-value = 0.04771
+roc.test(roc1e,roc2e,method = 'delong') #p-value = 0.0007127
+#2vs3
+roc.test(roc2a,roc3a,method = 'delong') #p-value = 0.3076
+roc.test(roc2e,roc3e,method = 'delong') #p-value = 0.07791
+#1vs3
+roc.test(roc1a,roc3a,method = 'delong') #p-value = 0.5177
+roc.test(roc1e,roc3e,method = 'delong') #p-value = 0.6638
+
+#2vs3
+roc.test(roc2a,roc2e,method = 'delong') #p-value = 0.907
+
+```
+
+
+
+### MCA analysis
+```{r merge_ER_LBvsOTHERS_variabels with p_data_pre}
+load("./figures/refine_beforenormal.Rdata")
+load("bas.Rdata")
+mydata$Upro<-beforenor
+class4<-bb3$pprob
+table(basdatanew$ID==class4$ID)
+data<-cbind(basdatanew,fclass4=class4[,c(2)])
+load("basdatatree_out.Rdata")
+
+df<-basdatatree_out[,c("age", "sleduration","AI", "cellcrescent","sclerosis", "TIshrink","UP24H","ALB","RBC","CR",  "BNP", "DD", "CRP","IGG","SLEDAI")]
+df_cor=cor(df)
+kappa(df_cor, exact=T)  ###1000 无多重共线性
+
+library(foreign)
+library(nnet)
+library(ggplot2)
+library(reshape2)
+
+basdatatree_out$fclass4<-as.factor(basdatatree_out$fclass4)
+
+basdatatree_out$fclass4 <- relevel(basdatatree_out$fclass4, ref = "0") 
+basdatatree_out$LNCLASS_si <- relevel(basdatatree_out$LNCLASS_si, ref = "mix")
+```
+
+
+```{r_data_pre}
+dput(names(basdatatree_out))
+muldata1<-basdatatree_out[,c("age","gender","sleduration",  "LNduration", "newonsetLN", "AKI", "LNCLASS_si","IorII", "III", "IV", "mix", "V","AI", "debri", "cellcrescent", "sclerosis", "TIshrink", "TIsclerosis","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG", "HTN","priois")] ##去掉激素量
+
+vars<-c("age","gender","sleduration",  "LNduration", "newonsetLN", "AKI", "IorII", "III", "IV", "mix", "V","AI", "debri", "cellcrescent", "sclerosis", "TIshrink", "TIsclerosis","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG", "HTN","priois")
+
+numvars<-c("age","sleduration",  "LNduration", "AI",  "cellcrescent", "sclerosis", "TIshrink","UP24H", "ALB", "RBC", "CR", "BNP", "CRP", "IGG","priois")
+
+factorvars<-setdiff(vars,numvars)
+```
+
+
+```{r}
+library(clustMD)
+# ?clustMD
+muldata1<-muldata1[,c(numvars,factorvars)] #15+12
+
+   
+library(naniar)
+vis_miss(muldata1)
+muldata1[factorvars]<-lapply(muldata1[factorvars],as.numeric)
+
+
+    # Order variables (Continuous, ordinal, nominal)
+    Y <- as.matrix(muldata1)
+    
+
+    # Standardise continuous variables
+    Y[, 1:15] <- scale(Y[, 1:15])
+
+    ## Not run: 
+    res <- clustMD(X = Y, G = 4, CnsIndx = 15, OrdIndx = 15, Nnorms = 20000,
+    MaxIter = 500, model = "EVI", store.params = FALSE, scale = TRUE, 
+    startCL = "kmeans", autoStop= TRUE, ma.band=30, stop.tol=0.0001)
+    ?clustMD
+    res$cl
+## End(Not run)
+    
+    
+    
+	data(Byar)
+    # Transformation skewed variables
+    Byar$Size.of.primary.tumour <- sqrt(Byar$Size.of.primary.tumour)
+    Byar$Serum.prostatic.acid.phosphatase <- log(Byar$Serum.prostatic.acid.phosphatase)
+
+    # Order variables (Continuous, ordinal, nominal)
+    Y <- as.matrix(Byar[, c(1, 2, 5, 6, 8, 9, 10, 11, 3, 4, 12, 7)])
+
+    # Start categorical variables at 1 rather than 0
+    Y[, 9:12] <- Y[, 9:12] + 1
+
+    # Standardise continuous variables
+    Y[, 1:8] <- scale(Y[, 1:8])
+
+    # Merge categories of EKG variable for efficiency
+    Yekg <- rep(NA, nrow(Y))
+    Yekg[Y[,12]==1] <- 1
+    Yekg[(Y[,12]==2)|(Y[,12]==3)|(Y[,12]==4)] <- 2
+    Yekg[(Y[,12]==5)|(Y[,12]==6)|(Y[,12]==7)] <- 3
+    Y[, 12] <- Yekg
+
+    ## Not run: 
+    res <- clustMD(X = Y, G = 3, CnsIndx = 8, OrdIndx = 11, Nnorms = 20000,
+    MaxIter = 500, model = "EVI", store.params = FALSE, scale = TRUE, 
+    startCL = "kmeans", autoStop= TRUE, ma.band=30, stop.tol=0.0001)
+    
+## End(Not run)    
+    
+data("smoke")
+str(smoke)
+ca(smoke)
+
+muldata2<-muldata1
+muldata2$id<-c(1:194)
+muldata2$rown<-paste(muldata2$fclass4,muldata2$id)
+rownames(muldata2)<-muldata2$rown
+muldata2<-muldata2[,-c(28:30)]
+mjca(muldata2)
+plot(mjca(muldata2))
+plot(mjca(muldata2), mass = TRUE, contrib = "absolute",
+map = "rowgreen", arrows = c(FALSE, TRUE))
+
+
+```
+
+
+```{r CUTOFF_training set}
+traincut<-trainData
+traincut$fclass4<-as.factor(traincut$fclass4)
+
+newcutoffcol=function(f){
+library("OptimalCutpoints")
+datacut<-traincut[,c("fclass4",f)]
+optimal.Youden <- optimal.cutpoints(X =f,status ="fclass4",tag.healthy =1,
+                                    methods ="Youden",data = datacut,
+                                    ci.fit = TRUE, conf.level = 0.95)
+cutoff<-optimal.Youden[["Youden"]][["Global"]][["optimal.cutoff"]]$cutoff
+cat(cutoff)
+plot(optimal.Youden, which = 1,col = "red", ylim = c(0,1)) #plot1
+plot(optimal.Youden, which = 3,col = "red", ylim = c(0,1)) #plot2
+colname<-paste(f,cutoff, sep = "_")
+newcol<-as.data.frame(ifelse(traincut[,f] >= cutoff , "1", "0"))
+colnames(newcol)<-colname
+traincut<-cbind(traincut,newcol)
+                        }
+
+for(i in c("sleduration",  "LNduration", "AI",  "cellcrescent", "sclerosis", "TIshrink","UP24H",  "RBC", "CR", "BNP", "CRP")){traincut<-newcutoffcol(i)}
+#generate new col according to cutoff value
+
+dput(names(traincut))
+
+for(i in c("sleduration_0.92", "LNduration_0.17", "AI_7", 
+"cellcrescent_0.14", "sclerosis_0.32", "TIshrink_10", "UP24H_2.4", 
+"RBC_27", "CR_101", "BNP_26", "CRP_0.43")) {traincut[,i] <- as.factor(traincut[,i])}
+
+
+newcutoffcol=function(f){
+library("OptimalCutpoints")
+datacut<-traincut[,c("fclass4",f)]
+optimal.Youden <- optimal.cutpoints(X =f,status ="fclass4",tag.healthy =0,
+                                    methods ="Youden",data = datacut,
+                                    ci.fit = TRUE, conf.level = 0.95)
+cutoff<-optimal.Youden[["Youden"]][["Global"]][["optimal.cutoff"]]$cutoff
+cat(cutoff)
+plot(optimal.Youden, which = 1,col = "red", ylim = c(0,1)) #plot1
+plot(optimal.Youden, which = 3,col = "red", ylim = c(0,1)) #plot2
+colname<-paste(f,cutoff, sep = "_")
+newcol<-as.data.frame(ifelse(traincut[,f] >= cutoff , "1", "0"))
+colnames(newcol)<-colname
+traincut<-cbind(traincut,newcol)
+                        }
+
+for(i in c("age","ALB", "IGG")){traincut<-newcutoffcol(i)}
+#generate new col according to cutoff value
+
+dput(names(traincut))
+
+for(i in c("age_48",  "ALB_25.7","IGG_13.2")) {traincut[,i] <- as.factor(traincut[,i])}
+
+# save(traincut,file="traincut_130.Rdata")
+
+fit.full <- glm(fclass4 ~ UP24H_2.27,
+                data=traincut,family=binomial(link="logit"))
+summary(fit.full)#0.0000000474 ***
+```
+
+```{r CUTOFF_testing set}
+dput(names(traincut))
+testcut<-testData
+testcutoffcol=function(f,cutoff){
+colname<-paste(f,cutoff, sep = "_")
+newcol<-as.data.frame(ifelse(testcut[,f] >= cutoff , "1", "0"))
+colnames(newcol)<-colname
+testcut<-cbind(testcut,newcol)
+                                 }
+
+("sleduration_0.92", "LNduration_0.17", "AI_7", 
+"cellcrescent_0.14", "sclerosis_0.32", "TIshrink_10", "UP24H_2.4", 
+"RBC_27", "CR_101", "BNP_26", "CRP_0.43")
+for(i in c("age_48",  "ALB_25.7","IGG_13.2")) 
+
+testcut<-testcutoffcol("age",48)
+testcut<-testcutoffcol("sleduration",0.92)
+testcut<-testcutoffcol("LNduration",0.17)
+testcut<-testcutoffcol("AI",7)
+testcut<-testcutoffcol("cellcrescent",0.14)
+testcut<-testcutoffcol("sclerosis",0.32)
+testcut<-testcutoffcol("TIshrink",10)
+testcut<-testcutoffcol("UP24H",2.4)
+testcut<-testcutoffcol("ALB",25.7)
+testcut<-testcutoffcol("RBC",27)
+testcut<-testcutoffcol("CR",101)
+testcut<-testcutoffcol("BNP",26)
+testcut<-testcutoffcol("CRP",0.43)
+testcut<-testcutoffcol("IGG",13.2)
+
+for(i in c( "sleduration_0.92", "LNduration_0.17", "AI_7", 
+"cellcrescent_0.14", "sclerosis_0.32", "TIshrink_10", "UP24H_2.4", 
+"RBC_27", "CR_101", "BNP_26", "CRP_0.43", "age_48", "ALB_25.7", 
+"IGG_13.2")) {testcut[,i] <- as.factor(testcut[,i])}
+vis_miss(testcut)
+# save(testcut,file="testcut_64.Rdata")
+```
+
+```{r}
+load("testcut_45.Rdata")
+load("traincut_149.Rdata")
+```
+
